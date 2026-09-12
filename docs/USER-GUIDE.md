@@ -16,7 +16,7 @@ Chrome 扩展 / Windows UI Automation / native recorder
 结构化结果、截图、事件文件或生成的 Skill
 ```
 
-当前是私有预览源代码包。它没有上传到公开仓库，不包含云端模型、登录状态、Cookie、公司数据或用户生成的 Skill。
+当前是私有预览源代码包，已上传到私有 GitHub 仓库但尚未公开；不包含云端模型、登录状态、Cookie、公司数据或用户生成的 Skill。
 
 ## 能力地图
 

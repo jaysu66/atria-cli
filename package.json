@@ -1,0 +1,17 @@
+{
+  "name": "atria-cli",
+  "version": "0.1.0-public-preview",
+  "description": "Atria local-first CLI entrypoint for browser, desktop, and recording capabilities.",
+  "type": "module",
+  "bin": {
+    "atria": "bin/atria.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "doctor": "node bin/atria.mjs doctor --json",
+    "verify": "node scripts/verify-bundle.mjs"
+  },
+  "license": "SEE LICENSE-STATUS.md"
+}

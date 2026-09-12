@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "name": "atria-cli-public-preview",
+  "components": [
+    {
+      "id": "browser-bridge",
+      "path": "packages/browser-bridge",
+      "capabilities": ["browser.read", "browser.navigate", "browser.interact", "browser.extract"],
+      "platforms": ["windows", "macos", "linux"],
+      "licenseStatus": "MIT-present",
+      "configRequired": ["chrome-extension"],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/browser-bridge"
+    },
+    {
+      "id": "record-replay-windows",
+      "path": "packages/record-replay-windows",
+      "capabilities": ["desktop.control", "workflow.record", "workflow.replay", "skill.generate"],
+      "platforms": ["windows"],
+      "licenseStatus": "review-required",
+      "configRequired": ["rust", "native-build", "windows-ui-access"],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows"
+    },
+    {
+      "id": "atria-desktop-skill",
+      "path": "skills/atria-desktop",
+      "capabilities": ["desktop.control", "workflow.record"],
+      "platforms": ["windows"],
+      "licenseStatus": "review-required",
+      "configRequired": ["desktop-engine"],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-desktop"
+    },
+    {
+      "id": "atria-recording-skill",
+      "path": "skills/atria-recording",
+      "capabilities": ["workflow.route", "skill.generate"],
+      "platforms": ["windows"],
+      "licenseStatus": "review-required",
+      "configRequired": ["desktop-engine", "browser-engine"],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-recording"
+    },
+    {
+      "id": "atria-cli-overview",
+      "path": "skills/atria-cli-overview",
+      "capabilities": ["cli.explain", "capability.discover"],
+      "platforms": ["windows", "macos", "linux"],
+      "licenseStatus": "review-required",
+      "configRequired": [],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/atria-cli/skills/atria-cli-overview"
+    }
+  ]
+}

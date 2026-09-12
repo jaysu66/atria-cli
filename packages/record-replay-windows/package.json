@@ -1,0 +1,17 @@
+{
+  "name": "record-replay-windows",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Record Windows desktop workflows into semantic event streams and generate reusable Codex skills.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build:native": "powershell -ExecutionPolicy Bypass -File ./scripts/build-native.ps1",
+    "smoke:mcp": "node ./scripts/probe-mcp.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.2.1"
+  }
+}

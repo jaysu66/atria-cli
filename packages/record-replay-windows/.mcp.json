@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "event-stream": {
+      "title": "Record & Replay Windows Event Stream",
+      "description": "Record Windows desktop workflows into events.jsonl and generate local Codex skills.",
+      "cwd": ".",
+      "command": "node",
+      "args": [
+        "./mcp/server.mjs"
+      ]
+    }
+  }
+}

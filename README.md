@@ -32,7 +32,7 @@ README 面向使用者，说明用途、输入输出、依赖、体验和安全�
 
 ## 可选：Agent 协作与工程方法
 
-[agent-practice](https://github.com/jaysu66/agent-practice) 是独立的方法资产仓库，整理 Agent 协作思考、项目 OS、需求管理与 Design OS 等工程实践。它回答“如何组织需求、设计和多 Agent 协作”；本仓库回答“Agent 能调用哪些工具完成实际操作”。私有阶段仅授权协作者可访问。
+[atria-skill-library](https://github.com/jaysu66/atria-skill-library) 是独立的个人 Skill 总库，按领域整理方法、经验和可选 Pack。当前首个领域是 Agent Engineering；它回答“如何组织需求、设计和协作”，本仓库回答“Agent 能调用哪些工具完成实际操作”。私有阶段仅授权协作者可访问。
 
 两者按受众分开，没有强制安装关系：只想使用浏览器、桌面或录制能力，不必安装工程方法；只想阅读方法论，也不需要运行 CLI。方法仓库中的 Skill 可按需选择，不应默认把整套项目规则写进使用者的环境。
 

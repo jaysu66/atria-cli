@@ -18,6 +18,24 @@ PPT、通用办公助手、公司业务流程、客户数据、登录状态、Co
 - [组件许可状态](LICENSE-STATUS.md)：发布前必须逐项确认，不能把当前预览当作许可已清理完毕。
 - [组件清单](manifests/components.json)：机器可读的平台、能力和运行时要求。
 
+## 每个 Skill 的说明
+
+README 面向使用者，说明用途、输入输出、依赖、体验和安全边界；各目录内的 `SKILL.md` 则是给 Agent 的执行协议。
+
+| Skill | 从这里了解 |
+| --- | --- |
+| `atria-cli-overview` | [能力总览与选择](skills/atria-cli-overview/README.md) |
+| `atria-browser-bridge` | [真实 Chrome 操作与页面提取](skills/atria-browser-bridge/README.md) |
+| `atria-desktop` | [Windows 桌面控制](skills/atria-desktop/README.md) |
+| `atria-recording` | [选择正确的录制方式](skills/atria-recording/README.md) |
+| `record-replay-windows` | [录制会话、语义 Skill 与回放](skills/record-replay-windows/README.md) |
+
+## 可选：Agent 协作与工程方法
+
+[agent-practice](https://github.com/jaysu66/agent-practice) 是独立的方法资产仓库，整理 Agent 协作思考、项目 OS、需求管理与 Design OS 等工程实践。它回答“如何组织需求、设计和多 Agent 协作”；本仓库回答“Agent 能调用哪些工具完成实际操作”。私有阶段仅授权协作者可访问。
+
+两者按受众分开，没有强制安装关系：只想使用浏览器、桌面或录制能力，不必安装工程方法；只想阅读方法论，也不需要运行 CLI。方法仓库中的 Skill 可按需选择，不应默认把整套项目规则写进使用者的环境。
+
 ## 5 分钟检查
 
 需要 Node.js 18 或更高版本。此预览不需要在根目录安装依赖，但保留 `npm` 脚本方便统一检查：

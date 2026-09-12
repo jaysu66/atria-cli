@@ -59,7 +59,7 @@ node .\bin\atria.mjs desktop
 
 1. 解压包并安装 Node.js 18+。
 2. 执行 `node .\bin\atria.mjs doctor --json`，保存输出作为安装基线。
-3. 执行 `node .\bin\atria.mjs skills list`，确认四个 Skill 可见。
+3. 执行 `node .\bin\atria.mjs skills list`，确认 5 个 Skill 可见（其中 `atria-cli-overview` 是能力说明与路由 Skill）。
 4. 浏览器用户先加载 Chrome 扩展；桌面用户按组件 README 安装依赖并构建 native。
 5. 让 Agent 读取对应 `SKILL.md`，再启动相应 MCP 服务。
 6. 先执行读取类动作（`browser_status`、`read_page`、桌面 snapshot），确认目标正确后再写入、发送、删除或提交。

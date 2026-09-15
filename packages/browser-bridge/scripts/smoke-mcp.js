@@ -6,11 +6,12 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const serverPath = path.join(root, 'mcp-server.js');
 const smokePort = Number(process.env.ATRIA_BROWSER_SMOKE_PORT || (48652 + Math.floor(Math.random() * 1000)));
+const smokeToken = 'smoke_token_abcdefghijklmnopqrstuvwxyz0123456789';
 
 // Every tool the contract promises. A rename that misses one half of the
 // codebase shows up here rather than as a puzzling failure at call time.
 const EXPECTED_TOOLS = [
-  'browser_status', 'tabs_context', 'tabs_create', 'tabs_close', 'tabs_activate',
+  'browser_status', 'operation_status', 'tabs_context', 'tabs_create', 'tabs_close', 'tabs_activate',
   'navigate', 'read_page', 'get_page_text', 'extract_page', 'find',
   'form_input', 'file_upload', 'computer', 'javascript_tool',
   'browser_batch', 'browser_parallel', 'wait_for', 'cdp_tool',
@@ -44,7 +45,7 @@ function runMcpSmoke() {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [serverPath], {
       cwd: root,
-      env: { ...process.env, ATRIA_BROWSER_PORT: String(smokePort) },
+      env: { ...process.env, ATRIA_BROWSER_PORT: String(smokePort), ATRIA_BROWSER_AUTH_TOKEN: smokeToken },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -107,7 +108,7 @@ async function run() {
 
   const standalone = spawn(process.execPath, [serverPath, '--standalone'], {
     cwd: root,
-    env: { ...process.env, ATRIA_BROWSER_PORT: String(smokePort) },
+    env: { ...process.env, ATRIA_BROWSER_PORT: String(smokePort), ATRIA_BROWSER_AUTH_TOKEN: smokeToken },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
@@ -115,8 +116,17 @@ async function run() {
     stderr += chunk.toString('utf8');
   });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    const health = await requestHealth(smokePort);
+    let health = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 30 && !health; attempt += 1) {
+      try {
+        health = await requestHealth(smokePort);
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    if (!health) throw lastError || new Error('HTTP health did not become ready');
     if (!health.ok) throw new Error('health ok=false');
     console.log(`HTTP health ok: ${health.name}`);
   } finally {

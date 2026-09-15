@@ -56,6 +56,8 @@ node .\bin\atria.mjs doctor --json
 node .\bin\atria.mjs desktop
 ```
 
+如用户选择看到执行过程，可运行 `atria visual enable`；需要“不可见就不执行”时用 `--required`。暂停/恢复/停止分别是 `atria automation pause|resume|stop`。这些控制桌面执行，不控制 Chrome Bridge。
+
 ### 录制：把一次演示变成 Skill
 
 ```text
@@ -63,6 +65,8 @@ node .\bin\atria.mjs desktop
 ```
 
 生成的 Skill 应保存在 CLI 包外的用户 Skill 目录，升级 CLI 时不会被覆盖。
+
+动作状态按真实结果解释：`unknown` 不能自动重试，`needsAgent` 需要人工补足，overlay 动画不能替代目标状态验证。独立 overlay 与 `event_stream_panel` 宿主 widget 是两件事。
 
 ## Agent 如何使用
 
@@ -76,9 +80,9 @@ Agent 先读取对应目录中的 `SKILL.md`。Skill 文件告诉 Agent：
 
 因此，CLI 命令是稳定入口，Skill 是行为协议，组件 MCP 服务才是实际执行者。三者分层后，新增 Skill 不需要复制一套新的浏览器或桌面引擎。
 
-## 当前预览的现实体验
+## 当前私有候选的现实体验
 
 - 浏览器能力可以在安装扩展后直接验证。
 - 桌面能力需要 Windows、Rust、Node 依赖和本地 native 构建。
 - 当前没有自动安装器、自动更新器或在线 Skill 市场。
-- 当前包是私有预览源代码，不代表所有组件已经完成公共发布许可审查。
+- 当前包是私有候选源代码，另有隔离的原生二进制候选；不代表所有组件已经完成公共发布许可审查。

@@ -11,9 +11,11 @@
  *   node scripts/acceptance.js
  */
 const http = require('http');
+const fs = require('fs');
 
 const PORT = Number(process.env.ATRIA_BROWSER_PORT || 47652);
 const FIXTURE_PORT = Number(process.env.ATRIA_FIXTURE_PORT || 8099);
+const TOKEN = String(process.env.ATRIA_BROWSER_AUTH_TOKEN || '');
 const base = (name) => `http://127.0.0.1:${FIXTURE_PORT}/${name}`;
 const GROUP = 'Atria acceptance';
 
@@ -23,7 +25,11 @@ function call(name, args) {
     const req = http.request(
       {
         host: '127.0.0.1', port: PORT, path: '/tools/call', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length },
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': payload.length,
+          ...(TOKEN ? { 'X-Atria-Token': TOKEN } : {}),
+        },
       },
       (res) => {
         let buf = '';
@@ -50,7 +56,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const results = [];
 function check(name, pass, detail) {
-  results.push({ name, pass });
+  results.push({ name, pass, detail: String(detail).replace(/\s+/g, ' ').slice(0, 500) });
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}\n      ${String(detail).replace(/\s+/g, ' ').slice(0, 150)}`);
 }
 
@@ -263,6 +269,9 @@ async function main() {
 
   const failed = results.filter((r) => !r.pass).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
+  if (process.env.ATRIA_EVIDENCE_FILE) {
+    fs.writeFileSync(process.env.ATRIA_EVIDENCE_FILE, `${JSON.stringify({ ok: failed === 0, browserPort: PORT, fixturePort: FIXTURE_PORT, results }, null, 2)}\n`, 'utf8');
+  }
   if (failed) process.exit(1);
 }
 

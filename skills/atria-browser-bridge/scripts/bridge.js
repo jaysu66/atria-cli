@@ -15,6 +15,7 @@
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -22,25 +23,33 @@ const { spawn } = require('child_process');
 
 const HOST = process.env.ATRIA_BROWSER_HOST || '127.0.0.1';
 const PORT = Number(process.env.ATRIA_BROWSER_PORT || 47652);
-const HOME =
-  process.env.ATRIA_BROWSER_BRIDGE_HOME ||
-  path.join(os.homedir(), 'Desktop', 'atria-browser-bridge-oss');
+const bundledHome = path.resolve(__dirname, '..', '..', '..');
+const cliPackagedHome = path.join(bundledHome, 'packages', 'browser-bridge');
+const compatibilityHome = path.join(os.homedir(), 'Desktop', 'atria-browser-bridge-oss');
+const HOME = process.env.ATRIA_BROWSER_BRIDGE_HOME || (
+  fs.existsSync(path.join(bundledHome, 'mcp-server.js'))
+    ? bundledHome
+    : fs.existsSync(path.join(cliPackagedHome, 'mcp-server.js')) ? cliPackagedHome : compatibilityHome
+);
 const SERVER = path.join(HOME, 'mcp-server.js');
+const TOKEN_FILE = process.env.ATRIA_BROWSER_AUTH_FILE || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Atria', 'browser-bridge.token');
 const OUT_DIR = path.join(os.tmpdir(), 'atria-bridge');
 const MAX_STDOUT = 30000;
 
 function request(method, urlPath, body) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body), 'utf8');
+    const token = process.env.ATRIA_BROWSER_AUTH_TOKEN || (fs.existsSync(TOKEN_FILE) ? fs.readFileSync(TOKEN_FILE, 'utf8').trim() : '');
     const req = http.request(
       {
         host: HOST,
         port: PORT,
         path: urlPath,
         method,
-        headers: payload
-          ? { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': payload.length }
-          : {},
+        headers: {
+          ...(payload ? { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': payload.length } : {}),
+          ...(token ? { 'X-Atria-Token': token } : {}),
+        },
       },
       (res) => {
         let buf = '';
@@ -48,7 +57,15 @@ function request(method, urlPath, body) {
         res.on('data', (c) => (buf += c));
         res.on('end', () => {
           try {
-            resolve(JSON.parse(buf));
+            const parsed = JSON.parse(buf);
+            if ((res.statusCode || 500) >= 400) {
+              const error = new Error(`${parsed.code || `HTTP ${res.statusCode}`}: ${parsed.error || 'bridge request failed'}`);
+              error.statusCode = res.statusCode;
+              error.response = parsed;
+              reject(error);
+              return;
+            }
+            resolve(parsed);
           } catch (_) {
             reject(new Error(`non-JSON response (${res.statusCode}): ${buf.slice(0, 300)}`));
           }
@@ -87,6 +104,26 @@ async function start() {
     }
   }
   throw new Error('bridge server did not come up within 5s');
+}
+
+async function pairedHealth() {
+  try {
+    const current = await health();
+    if (current.authentication === 'paired') return current;
+    throw new Error('browser bridge is running but this client does not have its pairing token');
+  } catch (error) {
+    if (error.code === 'ECONNREFUSED') return start();
+    throw error;
+  }
+}
+
+async function pairingToken() {
+  if (process.env.ATRIA_BROWSER_AUTH_TOKEN) return process.env.ATRIA_BROWSER_AUTH_TOKEN;
+  if (!fs.existsSync(TOKEN_FILE)) await start();
+  if (!fs.existsSync(TOKEN_FILE)) throw new Error(`pairing token was not created at ${TOKEN_FILE}`);
+  const token = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
+  if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) throw new Error(`invalid pairing token file: ${TOKEN_FILE}`);
+  return token;
 }
 
 function parseArgs(raw) {
@@ -160,6 +197,20 @@ async function main() {
     console.log(JSON.stringify(await start()));
     return;
   }
+  if (first === '--pair') {
+    process.stdout.write(`${await pairingToken()}\n`);
+    process.stderr.write('Paste this local token into the Atria Browser Bridge extension popup. Do not share it.\n');
+    return;
+  }
+  if (first === '--status') {
+    const operationId = process.argv[3];
+    if (!operationId) throw new Error('usage: node bridge.js --status <operationId>');
+    console.log(JSON.stringify(await request('GET', `/operations/${encodeURIComponent(operationId)}`), null, 2));
+    return;
+  }
+
+  const bridge = await pairedHealth();
+  const sessionId = `cli:${process.pid}`;
 
   // `--js <file.js> [tabId]` sidesteps JSON escaping entirely: the script is read
   // as a file and the request is built here, so regex escapes like \s never have
@@ -168,14 +219,25 @@ async function main() {
     const [, file, tabId] = process.argv.slice(2);
     if (!file) throw new Error('usage: node bridge.js --js <file.js> [tabId]');
     const code = fs.readFileSync(file, 'utf8');
-    const jsBody = { name: 'javascript_tool', arguments: { text: code, ...(tabId ? { tabId: Number(tabId) } : {}) } };
+    const jsBody = {
+      name: 'javascript_tool',
+      operationId: `${bridge.bootId}:${crypto.randomUUID()}`,
+      sessionId,
+      arguments: { text: code, ...(tabId ? { tabId: Number(tabId) } : {}) },
+    };
     const jsResponse = await request('POST', '/tools/call', jsBody);
     fs.mkdirSync(OUT_DIR, { recursive: true });
     process.stdout.write(`${materialize(jsResponse.result, `${process.pid}-js`)}\n`);
     return;
   }
 
-  const body = { name: first, arguments: parseArgs(rawArgs) };
+  const parsedArgs = parseArgs(rawArgs);
+  const body = {
+    name: first,
+    operationId: parsedArgs.operationId || `${bridge.bootId}:${crypto.randomUUID()}`,
+    sessionId: parsedArgs.sessionId || sessionId,
+    arguments: parsedArgs,
+  };
   let response;
   try {
     response = await request('POST', '/tools/call', body);
@@ -184,8 +246,8 @@ async function main() {
       await start();
       response = await request('POST', '/tools/call', body);
     } else if (error.code === 'ECONNRESET') {
-      // A keep-alive socket the server closed underneath us. The request never
-      // reached a tool, so retrying once is safe rather than a double action.
+      // The request may have reached the bridge. Reuse the exact operationId;
+      // the server either joins the in-flight call or returns its retained result.
       response = await request('POST', '/tools/call', body);
     } else {
       throw error;

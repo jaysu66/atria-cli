@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const packageVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const browserServer = join(root, 'packages', 'browser-bridge', 'mcp-server.js');
 const browserBridgeCli = join(root, 'skills', 'atria-browser-bridge', 'scripts', 'bridge.js');
 const desktopServer = join(root, 'packages', 'record-replay-windows', 'mcp', 'server.mjs');
@@ -16,6 +17,7 @@ const recordReplayActor = join(recordReplayPackage, 'bin', 'actor.exe');
 const recordReplayRecorder = join(recordReplayPackage, 'bin', 'recorder.exe');
 const recordReplayOverlay = join(recordReplayPackage, 'bin', 'overlay.exe');
 const skillsRoot = join(root, 'skills');
+const desktopHelper = resolve(process.env.ATRIA_DESKTOP_HELPER || join(skillsRoot, 'atria-desktop', 'scripts', 'desktop.js'));
 
 function localToken(name, envName) {
   if (process.env[envName]) return process.env[envName];
@@ -51,7 +53,7 @@ function localHealth(port, token, timeoutMs = 800) {
 }
 
 function help() {
-  console.log(`Atria CLI 0.1.0-public-preview
+  console.log(`Atria CLI ${packageVersion}
 
 Usage:
   atria doctor --json [--component browser|desktop|recording|visual]
@@ -61,9 +63,14 @@ Usage:
   atria desktop ...                   Start the Windows desktop MCP server
   atria recording ...                 Alias for the desktop recording engine
   atria mcp --capability <name>       Start a capability MCP server
+  atria visual status                 Read optional overlay state
+  atria visual enable [--required]    Enable overlay; required blocks when unavailable
+  atria visual disable                Disable overlay without disabling automation
+  atria automation status [id]        Read write-session or operation state
+  atria automation pause|resume|stop  Control the active interruptible operation
 
-The public preview contains source and adapters. Native binaries and dependencies
-are built or installed locally from the component instructions.
+This private candidate contains source and adapters. Native binaries are a
+separate private candidate until redistribution licensing is approved.
 `);
 }
 
@@ -167,13 +174,39 @@ async function startServer(server, args) {
   });
 }
 
+function runDesktopTool(tool, input = {}) {
+  return new Promise((resolveRun) => {
+    if (!existsSync(desktopHelper)) {
+      console.error(`Atria desktop helper is missing: ${desktopHelper}`);
+      process.exitCode = 2;
+      resolveRun(2);
+      return;
+    }
+    const child = spawn(process.execPath, [desktopHelper, tool, JSON.stringify(input)], {
+      stdio: 'inherit',
+      windowsHide: true,
+    });
+    child.once('error', (error) => {
+      console.error(`Unable to start desktop helper: ${error.message}`);
+      process.exitCode = 2;
+      resolveRun(2);
+    });
+    child.once('exit', (code, signal) => {
+      const exitCode = typeof code === 'number' ? code : 1;
+      if (signal) console.error(`Atria desktop helper stopped by ${signal}`);
+      process.exitCode = exitCode;
+      resolveRun(exitCode);
+    });
+  });
+}
+
 const args = process.argv.slice(2);
 const command = args.shift();
 
 if (!command || command === '--help' || command === '-h') {
   help();
 } else if (command === '--version' || command === '-v') {
-  console.log('0.1.0-public-preview');
+  console.log(packageVersion);
 } else if (command === 'doctor') {
   const componentIndex = args.indexOf('--component');
   const selectedComponent = componentIndex >= 0 ? args[componentIndex + 1] : null;
@@ -191,6 +224,23 @@ if (!command || command === '--help' || command === '-h') {
   await startServer(args.includes('--pair') ? browserBridgeCli : browserServer, args);
 } else if (command === 'desktop' || command === 'recording') {
   await startServer(desktopServer, args);
+} else if (command === 'visual') {
+  const action = args.shift();
+  if (action === 'status' && args.length === 0) await runDesktopTool('visual_status');
+  else if (action === 'enable' && args.every((arg) => arg === '--required')) await runDesktopTool('visual_enable', { required: args.includes('--required') });
+  else if (action === 'disable' && args.length === 0) await runDesktopTool('visual_disable');
+  else {
+    console.error('Use atria visual status, enable [--required], or disable.');
+    process.exitCode = 2;
+  }
+} else if (command === 'automation') {
+  const action = args.shift();
+  if (action === 'status' && args.length <= 1) await runDesktopTool('automation_status', args[0] ? { operationId: args[0] } : {});
+  else if (['pause', 'resume', 'stop'].includes(action) && args.length === 0) await runDesktopTool(`automation_${action}`);
+  else {
+    console.error('Use atria automation status [operationId], pause, resume, or stop.');
+    process.exitCode = 2;
+  }
 } else if (command === 'mcp') {
   const capabilityIndex = args.indexOf('--capability');
   const capability = capabilityIndex >= 0 ? args[capabilityIndex + 1] : undefined;

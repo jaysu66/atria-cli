@@ -39,6 +39,10 @@
         background: #dff3e8;
         color: #216246;
       }
+      .status.warn {
+        background: #fff0c7;
+        color: #805b12;
+      }
       code {
         font-size: 12px;
         color: #6d6558;
@@ -52,6 +56,9 @@
         background: #fff;
         color: #17211b;
         font: inherit;
+      }
+      input[type="password"] {
+        width: 150px;
       }
       .hint {
         margin: 6px 0 0;
@@ -90,6 +97,14 @@
       <span>Bridge 端口</span>
       <input id="bridge-port" inputmode="numeric" pattern="[0-9]*" aria-label="Bridge 端口">
     </div>
+    <div class="row">
+      <span>本机配对密钥</span>
+      <input id="bridge-token" type="password" autocomplete="off" aria-label="本机配对密钥">
+    </div>
+    <button id="save-token">保存并配对</button>
+    <p class="hint">
+      在终端运行 <code>atria browser --pair</code>，将本机生成的密钥粘贴到这里。密钥只保存在当前 Windows 用户和此扩展中，不要发送给他人。
+    </p>
     <div class="row">
       <span>允许导出登录态</span>
       <input id="allow-session-export" type="checkbox" aria-label="允许导出登录态">

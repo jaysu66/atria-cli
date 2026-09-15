@@ -1,6 +1,6 @@
 # License and publication status
 
-This directory is a public-preview staging bundle, not a final legal release.
+This directory is a `0.2.0-private.1` review candidate, not a public or final legal release.
 
 Before creating a public repository or publishing a package:
 
@@ -13,3 +13,6 @@ Before creating a public repository or publishing a package:
 The Browser Bridge component currently carries its own MIT license. The
 Record/Replay and dsh wrapper components still require a separate provenance
 and license decision; the root package intentionally does not override them.
+Source and native-binary candidates are kept separate. The native candidate is
+PRIVATE REVIEW ONLY and must not be redistributed until ownership, third-party
+notices, dependency licenses, and clean-build provenance are approved.

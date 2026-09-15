@@ -109,6 +109,8 @@ Omitting `tabId` targets the current active tab.
 
 **Use `computer` for anything with a side effect.** `computer` dispatches real CDP input, so clicks and keystrokes arrive with `isTrusted=true`. `javascript_tool` dispatches synthetic events, which canvas tiles, drag surfaces and rich editors ignore. Never click a button by JS when the click has to actually do something.
 
+**Interpret visual feedback separately from execution.** A `computer` result includes `visual.available`, `visual.tabId`, `visual.active`, and `visual.coordinatesRendered`. The action can succeed while the on-page renderer is unavailable on a restricted page; report that distinction instead of claiming the user saw it. The renderer shows action kind and typed-text length only, never the body. It is scoped to the requested tab and does not create another input event.
+
 **Refs and coordinates are equally real.** Passing `ref` to `computer` resolves the element to live coordinates, scrolls it into view, refuses the click if something covers it, and then dispatches the same trusted input a coordinate would. Prefer refs: they survive class-hash churn and re-resolve on every call, so a relayout between steps cannot send a click to whatever moved into the old position. Never cache coordinates across steps.
 
 **`form_input` vs `computer type`.** `form_input` writes the value directly and verifies by reading back — fast, and fine for plain inputs. If it returns `write_not_applied`, the editor rejected the write (ProseMirror, Lexical and friends often do); switch to `computer` with `action:"type"` and a `ref`, which clicks the field and types for real. Both verify, so neither will tell you a field is filled when it is not.
@@ -118,6 +120,8 @@ Omitting `tabId` targets the current active tab.
 **Virtual lists need real wheel events.** `computer` `scroll` and `scroll_until` dispatch CDP wheel input, which is what makes an infinite feed load its next batch. Scrolling via `javascript_tool` (`scrollTop`, `scrollBy`) moves the viewport without firing `wheel`, so the list never loads. Use `scroll_until` with `selector` or `text` to keep scrolling until the target appears.
 
 **Prefer `read_page` / `get_page_text` over `screenshot`** for reading content — text is cheaper and more precise. Screenshot when layout or a visual result is the actual question.
+
+Screenshot is either a real image of the requested tab or an explicit `SCREENSHOT_UNAVAILABLE` error. Do not replace a failed capture with DOM reconstruction and call it a screenshot.
 
 **Writing JS with regex escapes.** A `\s` or `\d` inside a hand-written JSON string is invalid JSON and has to be doubled. Avoid the problem entirely: write the script to a `.js` file and call `node "<skill-dir>/scripts/bridge.js" --js <file.js> [tabId]`.
 
@@ -142,6 +146,7 @@ Use `browser_batch` to collapse a known-good sequence into one round trip, and `
 - **`items[]` detection is a heuristic.** It picks the largest group of similarly-shaped siblings. On a page with several comparable grids it may pick the wrong one — pass `scopeSelector` when the answer matters.
 - **Cross-origin iframes are out of reach.** `read_page`, `find`, `form_input` and `javascript_tool` operate on the top frame. Navigate to the iframe's URL directly instead.
 - **`browser_parallel` shares one Chrome.** Concurrency is bounded by the browser, and heavy parallel tabs compete for CPU. Combine it with `set_request_blocking`.
+- **There is no browser-wide pause command in this component.** Stop issuing new browser calls or cancel the calling Agent task. The CLI `automation pause|resume|stop` commands control only the Windows desktop engine.
 
 ## Configuration
 

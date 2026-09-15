@@ -16,6 +16,11 @@ test("event stream server registers the expected MCP tools", () => {
   });
   const names = Object.keys(server._registeredTools).sort();
   assert.deepEqual(names, [
+    "action_events_recent",
+    "automation_pause",
+    "automation_resume",
+    "automation_status",
+    "automation_stop",
     "computer_batch",
     "computer_click",
     "computer_drag",
@@ -38,8 +43,93 @@ test("event stream server registers the expected MCP tools", () => {
     "ui_set_value",
     "ui_snapshot",
     "ui_wait_for",
+    "visual_disable",
+    "visual_enable",
+    "visual_status",
   ]);
   assert.equal(server._registeredTools.event_stream_start._meta["openai/widgetAccessible"], true);
+});
+
+test("20-step batch and replay share one sanitized action-event path", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rrw-s4-"));
+  const sessionID = "twenty-step-replay";
+  const sessionDir = path.join(root, sessionID);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionDir, "events.jsonl"),
+    Array.from({ length: 20 }, (_value, index) => JSON.stringify({
+      type: "keyboard.key",
+      timestamp: new Date(1700000000000 + index).toISOString(),
+      input: { vkCode: 0x0d, keyName: "Enter" },
+    })).join("\n") + "\n",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(sessionDir, "suppressed_events.jsonl"), "", "utf8");
+  let operationSequence = 0;
+  const actor = {
+    actorBootId: "fake-boot",
+    createOperationId: () => `fake-boot:${++operationSequence}`,
+    addEventListener: () => () => {},
+    uiSnapshot: async () => ({
+      window: { hwnd: 101, pid: 202, title: "Fixture Window" },
+      elements: [{ i: 0, type: "Button", name: "Fixture", cx: 10, cy: 10, enabled: true }],
+    }),
+    screenshot: async () => ({}),
+    click: async () => ({ clicked: true }),
+    mouseMove: async () => ({ moved: true }),
+    typeText: async (params) => ({ typed: [...String(params.text || "")].length }),
+    key: async () => ({ keys: true }),
+    scroll: async () => ({ scrolled: true }),
+    windowFocus: async () => ({ focused: true, foreground: { hwnd: 101, pid: 202, processName: "fixture.exe", windowTitle: "Fixture Window" } }),
+    uiaFind: async () => ({ elements: [] }),
+    uiaInvoke: async () => ({ invoked: true }),
+    operationStatus: () => null,
+    pause: async () => ({ acknowledged: true }),
+    resume: async () => ({}),
+    stop: async () => ({ acknowledged: true }),
+    close: () => {},
+  };
+  const server = createEventStreamServer({
+    actorClient: actor,
+    automationLockPath: path.join(root, "desktop.lock"),
+    recorderClient: {
+      sessionRoot: root,
+      start: async () => ({}),
+      status: async () => ({}),
+      stop: async () => ({}),
+    },
+  });
+  t.after(() => {
+    server.closeRecorder();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  await server._registeredTools.ui_snapshot.handler({});
+  const secret = "fixture-secret-body";
+  const batch = await server._registeredTools.computer_batch.handler({
+    actions: Array.from({ length: 20 }, () => ({ action: "type", text: secret })),
+    returnState: false,
+    returnScreenshotPath: false,
+  });
+  assert.equal(batch.structuredContent.completed, true);
+  assert.equal(batch.structuredContent.results.length, 20);
+
+  const replay = await server._registeredTools.replay_run.handler({
+    sessionID,
+    stepDelayMs: 0,
+  });
+  assert.equal(replay.structuredContent.status, "succeeded");
+  assert.equal(replay.structuredContent.succeededCount, 20);
+
+  const events = server.actionCoordinator.recentEvents(1000);
+  const batchEvents = events.filter((event) => event.parentOperationId === batch.structuredContent.operationId);
+  const replayEvents = events.filter((event) => event.parentOperationId === replay.structuredContent.operationId);
+  assert.equal(batchEvents.filter((event) => event.phase === "prepare").length, 20);
+  assert.equal(batchEvents.filter((event) => event.phase === "input_dispatched").length, 20);
+  assert.equal(replayEvents.filter((event) => event.phase === "prepare").length, 20);
+  assert.equal(replayEvents.filter((event) => event.phase === "input_dispatched").length, 20);
+  assert.equal(new Set(batchEvents.filter((event) => event.phase === "input_dispatched").map((event) => event.operationId)).size, 20);
+  assert.equal(JSON.stringify(events).includes(secret), false);
 });
 
 test("event stream stop auto-generates a skill when Codex did not provide a summary", async () => {

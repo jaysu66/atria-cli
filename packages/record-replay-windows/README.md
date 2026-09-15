@@ -1,28 +1,68 @@
-# Record/Replay Windows component
+# Record/Replay Windows
 
-This component provides the Windows desktop MCP server, semantic workflow
-recording, Skill generation, replay helpers, and Rust native recorder source.
+Windows-only MCP component for UI Automation control, real mouse/keyboard input,
+workflow recording, semantic Skill generation, truthful replay, and optional
+standalone action feedback. `skills/record-replay-windows/SKILL.md` contains the
+Agent protocol.
 
-The public preview intentionally excludes `bin/*.exe`, `target/`, and
-`node_modules/`. Build and install them locally only after reviewing the
-component's source and license status.
+## Inputs and outputs
 
-## Local setup
+Inputs identify a window/control or physical coordinate, an action, expected
+state, recording scope, or replay plan. Outputs contain structured status,
+verification, counts, action events and optional screenshot/recording/Skill
+paths. `needs_agent`, `partial`, `unknown`, `failed` and `cancelled` are never
+converted to success.
+
+## Install
+
+Requirements: Windows, Node.js 18+, Rust stable with the Windows MSVC target,
+and normal access to the interactive user desktop.
 
 ```powershell
 npm install
 powershell -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
+npm test
 ```
 
-Run the component smoke test:
+The build must produce `bin/actor.exe`, `bin/recorder.exe` and
+`bin/overlay.exe` from the same source revision. Review the emitted SHA-256
+manifest before using a binary candidate. The source candidate intentionally
+omits compiled EXEs and `node_modules`.
 
-```powershell
-npm run smoke:mcp
-```
+## Experience and controls
 
-The first run should use a low-risk test application. Recording and replay can
-observe or control the Windows desktop, so confirm the target window and user
-intent before high-impact actions.
+An Agent normally snapshots UIA, binds the target window, performs one action,
+and checks the returned verification before continuing. Enable the optional
+overlay with `visual_enable`; use `{required:true}` only when an absent renderer
+must stop subsequent writes. The overlay is click-through and non-activating,
+shows safe action labels, and does not render typed body text.
 
-This component is a source candidate in the Atria CLI preview. It has no final
-redistribution license in this bundle yet; see the root `LICENSE-STATUS.md`.
+Emergency tools are `automation_status`, `automation_pause`,
+`automation_resume`, and `automation_stop`. Global pause/stop hotkeys are also
+registered by the current overlay. There is no tray entry in this candidate.
+
+Example: open an empty test editor and ask the Agent to dry-run a plan that
+types “Atria test” without saving. Confirm the selected hwnd/title, enable
+visual feedback, execute, then read the field back. Do not begin with a private
+or unsaved document.
+
+## Update and rollback
+
+Update the MCP source, Skill, native source and all three EXEs as one version.
+Stop only a daemon you own and only when no recording is active; keep user
+recordings and generated Skills outside the package. Run `npm test`, compare the
+binary hashes with the release manifest, then restart the daemon. Roll back the
+same complete set—never pair a newer JS protocol with older native programs.
+
+## Privacy, tested scope and limits
+
+UI text, screenshots and recordings can contain private data and may enter an
+Agent/model session. Default text recording is redacted and becomes a
+`needs_agent` replay step; this is not a promise that every on-screen secret is
+hidden. Confirm send/delete/pay/publish and unsaved-close operations immediately
+before execution.
+
+The private candidate passed Node and Rust suites plus a live Win32 overlay
+fixture on Windows. A clean Windows user/VM, two real Agent hosts, every DPI and
+negative-coordinate monitor arrangement, tray control, renderer singleton/
+reconnect, and overlay-free Agent screenshots remain separate release gates.

@@ -41,6 +41,8 @@ Non-negotiables:
 - Name the workflow **action-only**, in the **user's language**.
 - Never stop the desktop daemon while a recording is live.
 - Tell the user recording has started, then **wait** - do not poll in a tight loop.
+- `automation_pause` pauses an active replay/batch at a safe boundary, `automation_resume` continues it, and `automation_stop` cancels it. After pause acknowledgement, send no further action until resume.
+- If replay reports `needsAgent`, let the user or calling agent supply the missing semantic input and resume at the reported index. Never label that partial run successful.
 
 ## Browser network capture
 
@@ -64,3 +66,9 @@ Use this when the answer lives in an XHR/fetch JSON payload rather than in the r
 **Confirm the trigger.** Tell the user exactly when recording is live and exactly how they signal completion, so their "done" gesture is not itself captured as a step.
 
 **Secrets are masked, not replayable.** Redacted text cannot be replayed deterministically; replay will stop with `needsAgent` at that step. If a workflow needs a credential, plan for the user to type it themselves at replay time.
+
+## Visual feedback and host limits
+
+Recording status inside `event_stream_panel` is a host widget and requires a host that renders MCP resources. The optional standalone overlay is a separate Windows helper: it shows execution cursor/ripple/status without requiring Atria, but it does not display recording history and does not prove an action succeeded. Use `visual_status`, `visual_enable`, and `visual_disable` through `atria-desktop`.
+
+This private candidate is tested on Windows 11 with Node.js 18+. Browser-native click recording, clean-machine installation, all DPI/display layouts, tray controls, and all-host widget rendering remain limitations. Check component protocol versions before recording or replaying.

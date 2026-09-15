@@ -92,6 +92,8 @@ export function planReplay(events, suppressedEvents = []) {
     pushDueClusters(at);
     const processName = String(event.application?.processName || "");
     const windowTitle = String(event.window?.title || event.application?.windowTitle || "");
+    const windowHwnd = Number(event.window?.hwnd ?? event.application?.hwnd ?? 0) || null;
+    const processId = Number(event.application?.pid ?? 0) || null;
     if (type === "mouse.click" || type === "mouse.context_menu" || type === "mouse.middle_click") {
       steps.push({
         kind: "click",
@@ -101,15 +103,51 @@ export function planReplay(events, suppressedEvents = []) {
         uia: eventUia(event),
         processName,
         windowTitle,
+        windowHwnd,
+        processId,
       });
     } else if (type === "mouse.wheel") {
-      steps.push({ kind: "skip", reason: "wheel_not_replayed" });
+      const delta = Number(event.input?.wheelDelta ?? event.input?.delta ?? 0);
+      if (Number.isFinite(delta) && delta !== 0) {
+        steps.push({
+          kind: "scroll",
+          direction: delta > 0 ? "up" : "down",
+          amount: Math.max(1, Math.round(Math.abs(delta) / 120)),
+          x: Number(event.input?.x ?? 0),
+          y: Number(event.input?.y ?? 0),
+          processName,
+          windowTitle,
+          windowHwnd,
+          processId,
+        });
+      } else {
+        steps.push({
+          kind: "needs_agent",
+          reason: "wheel_direction_missing",
+          guidance: "录制事件没有保留滚轮方向，无法安全重放。请人工完成该滚动后，以 startIndex 续跑 replay_run。",
+        });
+      }
+    } else if (type === "keyboard.text") {
+      const text = typeof event.input?.text === "string" ? event.input.text : "";
+      if (text) {
+        steps.push({ kind: "type", text, processName, windowTitle, windowHwnd, processId });
+      } else {
+        steps.push({
+          kind: "needs_agent",
+          reason: "unicode_text_missing",
+          guidance: "录制事件声明了文本输入但未保留文本内容。请人工补足后，以 startIndex 续跑 replay_run。",
+        });
+      }
     } else if (type === "keyboard.key") {
       const key = vkToKey(event.input?.vkCode);
       if (key) {
-        steps.push({ kind: "key", keys: key, processName, windowTitle });
+        steps.push({ kind: "key", keys: key, processName, windowTitle, windowHwnd, processId });
       } else if (!MODIFIER_VK.has(Number(event.input?.vkCode))) {
-        steps.push({ kind: "skip", reason: `key_not_mapped:${event.input?.keyName || event.input?.vkCode}` });
+        steps.push({
+          kind: "needs_agent",
+          reason: `key_not_mapped:${event.input?.keyName || event.input?.vkCode}`,
+          guidance: "录制事件没有可安全重放的按键或文本语义。请按技能步骤人工补足后，以 startIndex 续跑 replay_run。",
+        });
       }
       // 裸修饰键静默跳过(不占步骤位)
     }
@@ -134,36 +172,62 @@ export function readJsonlFile(filePath) {
     .filter(Boolean);
 }
 
-async function ensureFocus(actor, step, state) {
+async function ensureFocus(actor, step, state, stepIndex) {
   const wantProcess = step.processName || "";
-  if (!wantProcess) return { ok: true, method: "none" };
-  if (state.focusedProcess === wantProcess) return { ok: true, method: "cached" };
-  // 先按录制窗口标题聚焦,标题已变(如文档改名)则按进程名。
+  if (!wantProcess && !step.windowTitle && !step.windowHwnd) return { ok: true, method: "none", expect: undefined };
+  const targetKey = `${step.windowHwnd || ""}|${step.processId || ""}|${wantProcess}|${step.windowTitle || ""}`;
+  // A cached selection is only a routing hint. Every native write still receives
+  // the exact hwnd/pid returned here and re-checks foreground immediately before input.
+  if (state.targetKey === targetKey && state.expect) return { ok: true, method: "cached", expect: state.expect };
   let result = null;
-  if (step.windowTitle) {
+  if (step.windowHwnd) {
     try {
-      result = await actor.windowFocus({ title: step.windowTitle });
+      result = await actor.windowFocus({
+        hwnd: step.windowHwnd,
+        processName: wantProcess || undefined,
+        title: step.windowTitle || undefined,
+        _actionStepIndex: stepIndex,
+      });
     } catch (_error) {
       result = null;
     }
   }
-  if (!result?.focused) {
+  if (step.windowTitle) {
+    if (!result?.focused) {
+      try {
+        result = await actor.windowFocus({ title: step.windowTitle, processName: wantProcess || undefined, _actionStepIndex: stepIndex });
+      } catch (_error) {
+        result = null;
+      }
+    }
+  }
+  if (!result?.focused && wantProcess) {
     try {
-      result = await actor.windowFocus({ processName: wantProcess });
+      result = await actor.windowFocus({ processName: wantProcess, _actionStepIndex: stepIndex });
     } catch (error) {
       return { ok: false, method: "focus_failed", error: error.message };
     }
   }
-  const fgProcess = String(result?.foreground?.processName || "");
-  if (!fgProcess.toLowerCase().includes(wantProcess.toLowerCase().replace(/\.exe$/, ""))) {
+  const foreground = result?.foreground || {};
+  const fgProcess = String(foreground.processName || "");
+  if (wantProcess && !fgProcess.toLowerCase().includes(wantProcess.toLowerCase().replace(/\.exe$/, ""))) {
     return { ok: false, method: "focus_mismatch", foreground: result?.foreground };
   }
-  state.focusedProcess = wantProcess;
-  return { ok: true, method: "focused" };
+  if (!result?.focused || !foreground.hwnd || !foreground.pid) {
+    return { ok: false, method: "focus_unverified", foreground };
+  }
+  const expect = {
+    hwnd: foreground.hwnd,
+    pid: foreground.pid,
+    processName: fgProcess || undefined,
+    titleExact: foreground.windowTitle || undefined,
+  };
+  state.targetKey = targetKey;
+  state.expect = expect;
+  return { ok: true, method: "focused", expect };
 }
 
-async function executeClick(actor, step) {
-  const expect = step.processName ? { processName: step.processName } : undefined;
+async function executeClick(actor, step, expect, stepIndex) {
   if (step.uia) {
     try {
       const locator = {
@@ -180,7 +244,7 @@ async function executeClick(actor, step) {
         if (r > l && b > t) {
           const cx = Math.round((l + r) / 2);
           const cy = Math.round((t + b) / 2);
-          await actor.click({ x: cx, y: cy, button: step.button, expect });
+          await actor.click({ x: cx, y: cy, button: step.button, expect, _actionStepIndex: stepIndex });
           return { ok: true, method: "uia", at: { x: cx, y: cy } };
         }
       }
@@ -188,8 +252,48 @@ async function executeClick(actor, step) {
       // UIA 失败退坐标
     }
   }
-  await actor.click({ x: step.x, y: step.y, button: step.button, expect });
+  await actor.click({ x: step.x, y: step.y, button: step.button, expect, _actionStepIndex: stepIndex });
   return { ok: true, method: "coords", at: { x: step.x, y: step.y } };
+}
+
+function summarizeReplay(plan, startIndex, results, {
+  status,
+  executionFinished,
+  stoppedAt,
+  needsAgent,
+} = {}) {
+  const plannedCount = Math.max(0, plan.length - startIndex);
+  const succeededCount = results.filter((result) => result.ok === true && result.method !== "skipped").length;
+  const failedCount = results.filter((result) => result.ok === false && result.kind !== "needs_agent").length;
+  const skippedCount = results.filter((result) => result.method === "skipped").length;
+  const needsAgentCount = results.filter((result) => result.kind === "needs_agent").length;
+  const attemptedCount = results.filter((result) => result.kind !== "needs_agent" && result.method !== "skipped").length;
+  const unresolvedCount = failedCount + skippedCount + needsAgentCount;
+  const rangeCompleted = Boolean(executionFinished) && unresolvedCount === 0 && results.length === plannedCount;
+  const completed = rangeCompleted && startIndex === 0;
+  const nextIndex = Number.isInteger(stoppedAt) ? stoppedAt : startIndex + results.length;
+  const resolvedStatus = status || (rangeCompleted ? "succeeded" : failedCount > 0 ? "partial" : "unknown");
+
+  return {
+    status: resolvedStatus,
+    overallStatus: completed ? "succeeded" : startIndex > 0 && rangeCompleted ? "partial" : resolvedStatus,
+    completed,
+    rangeCompleted,
+    executionFinished: Boolean(executionFinished),
+    startIndex,
+    endIndexExclusive: startIndex + results.length,
+    nextIndex,
+    plannedCount,
+    attemptedCount,
+    succeededCount,
+    failedCount,
+    skippedCount,
+    needsAgentCount,
+    unresolvedCount,
+    ...(Number.isInteger(stoppedAt) ? { stoppedAt } : {}),
+    ...(needsAgent ? { needsAgent } : {}),
+    results,
+  };
 }
 
 // 执行回放计划。返回逐步结果;needs_agent / 失败默认停住(让 agent 接管后续跑)。
@@ -199,39 +303,75 @@ export async function executeReplay(actor, plan, options = {}) {
   const stopOnFailure = options.stopOnFailure !== false;
   const captureDir = options.captureDir || null; // batch-L 运行留痕:每步执行后截关键帧,不传不截
   const results = [];
-  const state = { focusedProcess: null };
+  const state = { targetKey: null, expect: null };
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   for (let index = startIndex; index < plan.length; index += 1) {
     const step = plan[index];
     if (step.kind === "skip") {
-      results.push({ index, kind: step.kind, ok: true, method: "skipped", reason: step.reason });
+      results.push({ index, kind: step.kind, ok: false, unresolved: true, method: "skipped", reason: step.reason });
       continue;
     }
     if (step.kind === "needs_agent") {
       results.push({ index, kind: step.kind, ok: false, escalation: step });
-      return { completed: false, stoppedAt: index, needsAgent: step, results };
+      return summarizeReplay(plan, startIndex, results, {
+        status: "needs_agent",
+        executionFinished: false,
+        stoppedAt: index,
+        needsAgent: step,
+      });
     }
     try {
-      const focus = await ensureFocus(actor, step, state);
+      const focus = await ensureFocus(actor, step, state, index);
       if (!focus.ok) {
         results.push({ index, kind: step.kind, ok: false, method: focus.method, error: focus.error, foreground: focus.foreground });
-        if (stopOnFailure) return { completed: false, stoppedAt: index, results };
+        if (stopOnFailure) {
+          return summarizeReplay(plan, startIndex, results, {
+            status: "failed",
+            executionFinished: false,
+            stoppedAt: index,
+          });
+        }
         continue;
       }
       if (step.kind === "click") {
-        const outcome = await executeClick(actor, step);
+        const outcome = await executeClick(actor, step, focus.expect, index);
         results.push({ index, kind: "click", ...outcome });
       } else if (step.kind === "key") {
-        await actor.key({ keys: step.keys, expect: step.processName ? { processName: step.processName } : undefined });
+        await actor.key({ keys: step.keys, expect: focus.expect, _actionStepIndex: index });
         results.push({ index, kind: "key", ok: true, method: "key", keys: step.keys });
+      } else if (step.kind === "type") {
+        await actor.typeText({ text: step.text, expect: focus.expect, _actionStepIndex: index });
+        results.push({ index, kind: "type", ok: true, method: "unicode_text", length: [...step.text].length });
+      } else if (step.kind === "scroll") {
+        await actor.scroll({
+          direction: step.direction,
+          amount: step.amount,
+          x: step.x,
+          y: step.y,
+          expect: focus.expect,
+          _actionStepIndex: index,
+        });
+        results.push({ index, kind: "scroll", ok: true, method: "scroll", direction: step.direction, amount: step.amount });
       } else {
         results.push({ index, kind: step.kind, ok: false, error: `unknown step kind: ${step.kind}` });
-        if (stopOnFailure) return { completed: false, stoppedAt: index, results };
+        if (stopOnFailure) {
+          return summarizeReplay(plan, startIndex, results, {
+            status: "failed",
+            executionFinished: false,
+            stoppedAt: index,
+          });
+        }
       }
     } catch (error) {
       results.push({ index, kind: step.kind, ok: false, error: error.message });
-      if (stopOnFailure) return { completed: false, stoppedAt: index, results };
+      if (stopOnFailure) {
+        return summarizeReplay(plan, startIndex, results, {
+          status: "failed",
+          executionFinished: false,
+          stoppedAt: index,
+        });
+      }
     }
     if (captureDir && results.length && results[results.length - 1].index === index) {
       try {
@@ -243,5 +383,9 @@ export async function executeReplay(actor, plan, options = {}) {
     }
     if (stepDelayMs > 0) await sleep(stepDelayMs);
   }
-  return { completed: true, results };
+  const hasFailure = results.some((result) => result.ok === false);
+  return summarizeReplay(plan, startIndex, results, {
+    status: hasFailure ? "partial" : "succeeded",
+    executionFinished: true,
+  });
 }

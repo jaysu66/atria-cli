@@ -1,6 +1,6 @@
 # Atria CLI 快速开始
 
-这是 `0.1.0-public-preview` 的最短验证路径。完整的用户体验和安全说明见 [USER-GUIDE.md](USER-GUIDE.md)。
+这是 `0.2.0-private.1` 的最短验证路径。完整的用户体验和安全说明见 [USER-GUIDE.md](USER-GUIDE.md)。
 
 ## 1. 解压并检查包
 
@@ -14,7 +14,7 @@ node .\bin\atria.mjs skills list
 npm run verify
 ```
 
-`verify` 检查预览包是否缺文件或疑似带入凭据；`doctor` 同时报告源码和本机运行时状态。当前预览不包含桌面 `node_modules` 和 `.exe`，所以桌面部分正常会显示 `runtimeReady: false`。
+`verify` 扫描实际候选文件、来源摘要、禁止目录、维护者路径和疑似凭据；`doctor` 分别报告源码和本机运行时状态。源码候选不包含桌面 `node_modules` 和 `.exe`，所以桌面部分正常会显示 `runtimeReady: false`。
 
 ## 2. 浏览器能力
 
@@ -39,7 +39,7 @@ npm run verify
 
 1. 阅读 [record-replay-windows README](../packages/record-replay-windows/README.md)。
 2. 只在准备使用桌面能力时进入该组件安装依赖。
-3. 运行 `scripts/build-native.ps1` 构建本机 `actor.exe` 和 `recorder.exe`。
+3. 运行 `scripts/build-native.ps1` 构建本机 `actor.exe`、`recorder.exe` 和可选的 `overlay.exe`。
 4. 按组件 README 运行 smoke tests。
 5. 回到根目录执行 `node .\bin\atria.mjs doctor --json`，确认 `runtimeReady: true`。
 6. 启动：
@@ -50,11 +50,23 @@ npm run verify
 
 录制时先使用低风险的测试应用。流程通常是“开始录制 → 用户演示 → 停止 → 生成 Skill → dry-run → 确认后回放”。
 
+希望看到 Agent 的桌面动作时：
+
+```powershell
+node .\bin\atria.mjs visual enable
+node .\bin\atria.mjs visual status
+node .\bin\atria.mjs automation pause
+node .\bin\atria.mjs automation resume
+node .\bin\atria.mjs visual disable
+```
+
+`--required` 模式会在 overlay 未就绪时阻止下一次桌面写动作；普通模式会明确报告不可见但可按策略继续。overlay 是独立 Windows helper，不等于 MCP 宿主内的录制 panel。
+
 ## 常见问题
 
 ### `doctor` 显示 `runtimeReady: false`
 
-这是当前预览的预期结果：源码在包内，桌面依赖和 native 二进制需要你在本机安装/构建。浏览器能力不依赖这两个文件。
+这是源码候选的预期结果：源码在包内，桌面依赖和 native 二进制需要你在本机安装/构建或从获准的私有二进制候选安装。浏览器能力不依赖这些文件。
 
 ### 浏览器服务启动但没有标签页
 

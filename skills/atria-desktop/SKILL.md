@@ -1,6 +1,6 @@
 ---
 name: atria-desktop
-description: Drives the user's real Windows desktop through the Atria record-replay suite - read any window's accessibility tree as numbered elements, click and type into native apps with real input, focus windows, batch several actions into one call, screenshot, record a demonstrated workflow into a reusable skill, and deterministically replay it. This skill should be used whenever the user wants to operate a Windows desktop application, automate a GUI task outside the browser, click or type in a native app, inspect what is on screen, list or focus windows, record what they are about to demonstrate, or replay a previously recorded workflow. Trigger phrases include 操作桌面, 帮我点, 桌面自动化, 控制这个软件, 打开这个程序, 看看屏幕上有什么, 录一下我的操作, 录制工作流, 把我这套操作录下来, 回放那个流程, 重放录制, Windows 自动化, control this app, automate this desktop task, click that button, what is on my screen, record my workflow, replay the recording. Use it even for simple-sounding desktop requests - the local daemon starts itself and the skill handles perception, element indexes, and verification. Windows only.
+description: Drives the user's real Windows desktop through the Atria record-replay suite - read a window's accessibility tree as numbered elements, click and type into native apps with real input, focus windows, batch actions, take screenshots, record a demonstrated workflow into a reusable skill, and deterministically replay it. Use whenever the user wants to operate a Windows desktop application, automate a GUI task outside the browser, inspect the screen, list or focus windows, record what they demonstrate, or replay a recorded workflow. Trigger phrases include 操作桌面, 帮我点, 桌面自动化, 控制这个软件, 看看屏幕, 录一下我的操作, 录制工作流, 回放那个流程, Windows 自动化, control this app, automate this desktop task, what is on my screen, record my workflow, replay the recording. The local daemon starts itself and the skill handles perception, element indexes, verification, pause, and optional visual feedback. Windows only.
 ---
 
 # Atria Desktop
@@ -83,6 +83,20 @@ Use `computer_screenshot` for **visual confirmation only** - when the user asks 
 - `event_stream_generate_skill`, `event_stream_panel`
 - `replay_run`, `replay_note_fix`
 
+**Automation control and evidence**
+- `automation_status` - read the active operation and pause/stop state; an optional `operationId` reads one known operation.
+- `automation_pause` / `automation_resume` / `automation_stop` - control the current write session. After pause is acknowledged, do not send another action until resume.
+- `action_events_recent` - inspect truthful intent/dispatched/succeeded/failed/cancelled events. Treat `unknown` as unknown; never retry it automatically.
+
+**Independent visual feedback**
+- `visual_status` - report visual mode, renderer readiness and connection state.
+- `visual_enable` - enable the standalone Windows overlay; pass `required:true` when execution must stop if rendering is unavailable.
+- `visual_disable` - turn the overlay off. Desktop execution remains available.
+
+The independent overlay is not the same as `event_stream_panel`. The overlay is a small click-through Windows helper that can work for any host; `event_stream_panel` is an MCP host widget and appears only in hosts that render MCP resources. Do not promise that every host can show the widget.
+
+Action results include an operation status. `succeeded` means the executor confirmed the action. `failed` and `cancelled` are terminal. `needs_agent` means the user or agent must supply missing information, commonly redacted text. `unknown` means delivery may have occurred; inspect `automation_status` or the target state before deciding what to do. A visual animation is evidence of renderer acknowledgement, not evidence that an OS action succeeded.
+
 ## Rules that keep this reliable
 
 **Verify focus before typing.** Typing goes to whatever window has focus. Call `computer_window_focus` and check the returned flag, or pass `expect` to `computer_key`, before sending input that matters.
@@ -94,6 +108,10 @@ Use `computer_screenshot` for **visual confirmation only** - when the user asks 
 **Batch only deterministic runs.** `computer_batch` is for sequences you already know work. While exploring, act one call at a time and read the returned state.
 
 **This is the user's real machine.** Actions are visible and immediate. Before anything destructive - closing an unsaved window, deleting, submitting a payment, sending a message - confirm with the user first.
+
+**Use dry-run for replay.** Call `replay_run` with `dryRun:true` first. If a step returns `needsAgent`, stop and hand control back instead of inventing missing text or input semantics.
+
+**Check versions before acting.** Run `--health` and compare the bridge protocol with the packaged component manifest. Refuse writes when protocol versions differ. This private candidate is tested on Windows 11 with Node.js 18+; clean-machine installation, all DPI combinations, hot-plug displays, tray controls, and overlay exclusion from every screenshot path remain unverified.
 
 ## References
 

@@ -35,16 +35,19 @@ node .\bin\atria.mjs skills list
 
 `doctor` 目前检查组件、依赖目录和 native 文件是否存在，不能代替 Chrome 连接或真实桌面操作验收；`skills list` 只列出包内 Skill，不代表它们已安装进当前 Agent。
 
-## 能力限制与安全
+## 暂停、能力限制与安全
 
 - 当前是私有源码预览，不是云服务或一键安装器，也没有自动更新器。
 - 浏览器需要手动加载 Chrome 扩展；桌面和录制需要 Windows、本机依赖及 native 构建。
 - 导航只负责推荐能力，不能替用户授权发布、付款、删除或发送消息。
 - 本地工具的返回内容仍可能进入 Agent 的模型上下文与日志；“本地运行”不等于所有内容永不离开电脑。
 - 源码就绪、运行时就绪和许可就绪必须分别判断。
+- 本 Skill 自身不执行动作，因此没有暂停状态；桌面执行使用 `atria automation pause|resume|stop`，浏览器任务则停止调用方。可视化使用 `atria visual status|enable|disable`。
 
 ## 许可、来源与更新
 
 此 Skill 是 Atria CLI 的总览文档，当前尚无单独确认的开源许可证；参见 [许可状态](../../LICENSE-STATUS.md)。不要据此推定底层组件都可以再分发。
 
 随 Atria CLI 版本更新；更新前保留自己修改过的文件。可继续阅读 [用户指南](../../docs/USER-GUIDE.md) 和 [CLI 能力说明](../../docs/CLI-CAPABILITIES.md)。
+
+已在 Windows 11、Node.js 18+ 的本地 CLI 路由上验证。本 Skill 只是导航说明，不证明底层组件已在干净 VM、所有 Agent 宿主或所有显示器配置中通过。回退时恢复上一完整 CLI/Skill 版本并核对摘要，用户录制和配置不应位于包内。

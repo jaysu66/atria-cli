@@ -1,51 +1,109 @@
 {
-  "schemaVersion": 1,
-  "name": "atria-cli-public-preview",
+  "schemaVersion": 2,
+  "name": "atria-cli-private-candidate",
   "components": [
     {
       "id": "browser-bridge",
       "path": "packages/browser-bridge",
-      "capabilities": ["browser.read", "browser.navigate", "browser.interact", "browser.extract"],
-      "platforms": ["windows", "macos", "linux"],
+      "capabilities": [
+        "browser.read",
+        "browser.navigate",
+        "browser.interact",
+        "browser.extract"
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
       "licenseStatus": "MIT-present",
-      "configRequired": ["chrome-extension"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/browser-bridge"
+      "configRequired": [
+        "chrome-extension"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/browser-bridge",
+      "sourceCommit": "687ee0d9ac7fadbb418aca74fdd2a5d20daa17e0",
+      "sourceTreeHash": "7d546bc5d380bdbda9a9d0bef9784968013919f84a22ea0194fdb3f1aeb7a845",
+      "protocolVersion": 3
     },
     {
       "id": "record-replay-windows",
       "path": "packages/record-replay-windows",
-      "capabilities": ["desktop.control", "workflow.record", "workflow.replay", "skill.generate"],
-      "platforms": ["windows"],
+      "capabilities": [
+        "desktop.control",
+        "workflow.record",
+        "workflow.replay",
+        "skill.generate"
+      ],
+      "platforms": [
+        "windows"
+      ],
       "licenseStatus": "review-required",
-      "configRequired": ["rust", "native-build", "windows-ui-access"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows"
+      "configRequired": [
+        "rust",
+        "native-build",
+        "windows-ui-access"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows",
+      "sourceCommit": "bb2bb425093757abab8b6ec7ca457231e24f6e60",
+      "sourceTreeHash": "2699a2964d620f019f497367d8e0e0fa7c2c9f902c229babf3fefc4ea6a6f1e8",
+      "protocolVersion": 2
     },
     {
       "id": "atria-desktop-skill",
       "path": "skills/atria-desktop",
-      "capabilities": ["desktop.control", "workflow.record"],
-      "platforms": ["windows"],
+      "capabilities": [
+        "desktop.control",
+        "workflow.record"
+      ],
+      "platforms": [
+        "windows"
+      ],
       "licenseStatus": "review-required",
-      "configRequired": ["desktop-engine"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-desktop"
+      "configRequired": [
+        "desktop-engine"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-desktop",
+      "sourceCommit": null,
+      "sourceTreeHash": "84fffd26e784ead56c0e30962d92643b61b37e2e7c02cddd7bc371b920c67ff6",
+      "protocolVersion": 2
     },
     {
       "id": "atria-recording-skill",
       "path": "skills/atria-recording",
-      "capabilities": ["workflow.route", "skill.generate"],
-      "platforms": ["windows"],
+      "capabilities": [
+        "workflow.route",
+        "skill.generate"
+      ],
+      "platforms": [
+        "windows"
+      ],
       "licenseStatus": "review-required",
-      "configRequired": ["desktop-engine", "browser-engine"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-recording"
+      "configRequired": [
+        "desktop-engine",
+        "browser-engine"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-recording",
+      "sourceCommit": null,
+      "sourceTreeHash": "406e149718a9c28a32ed6cae7238e0913937667a31731dee68ebdcded1a3fd5d",
+      "protocolVersion": 2
     },
     {
       "id": "atria-cli-overview",
       "path": "skills/atria-cli-overview",
-      "capabilities": ["cli.explain", "capability.discover"],
-      "platforms": ["windows", "macos", "linux"],
+      "capabilities": [
+        "cli.explain",
+        "capability.discover"
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
       "licenseStatus": "review-required",
       "configRequired": [],
       "sourceOfTruth": "Atria/02-CLI与通用能力/atria-cli/skills/atria-cli-overview"
     }
-  ]
+  ],
+  "version": "0.2.0-private.1",
+  "generatedAt": "2026-09-15T06:42:44.250Z"
 }

@@ -60,7 +60,7 @@ test("planReplay orders clicks, keys, and inserts needs_agent for redacted typin
   const plan = planReplay(events, suppressed);
   assert.deepEqual(
     plan.map((s) => s.kind),
-    ["click", "needs_agent", "key", "skip"],
+    ["click", "needs_agent", "key", "needs_agent"],
   );
   assert.equal(plan[0].uia.name, "文本编辑器");
   assert.equal(plan[1].approxKeys, 2);
@@ -80,7 +80,7 @@ function mockActor(overrides = {}) {
     calls,
     windowFocus: async (p) => {
       calls.push(["windowFocus", p]);
-      return { focused: true, foreground: { processName: "Notepad.exe" } };
+      return { focused: true, foreground: { hwnd: 101, pid: 202, processName: "Notepad.exe", windowTitle: "Untitled - Notepad" } };
     },
     uiaFind: async (p) => {
       calls.push(["uiaFind", p]);
@@ -94,6 +94,14 @@ function mockActor(overrides = {}) {
       calls.push(["key", p]);
       return {};
     },
+    typeText: async (p) => {
+      calls.push(["typeText", p]);
+      return {};
+    },
+    scroll: async (p) => {
+      calls.push(["scroll", p]);
+      return {};
+    },
     ...overrides,
   };
 }
@@ -105,6 +113,8 @@ test("executeReplay prefers uia center over recorded coordinates", async () => {
   ]);
   const outcome = await executeReplay(actor, plan, { stepDelayMs: 0 });
   assert.equal(outcome.completed, true);
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(outcome.failedCount, 0);
   assert.equal(outcome.results[0].method, "uia");
   const clickCall = actor.calls.find(([name]) => name === "click");
   assert.deepEqual({ x: clickCall[1].x, y: clickCall[1].y }, { x: 20, y: 20 });
@@ -123,6 +133,30 @@ test("executeReplay falls back to coordinates when uia find fails", async () => 
   assert.deepEqual({ x: clickCall[1].x, y: clickCall[1].y }, { x: 111, y: 222 });
 });
 
+test("recorded Unicode text including a surrogate pair and newline replays exactly", async () => {
+  const text = "你好 Atria 😀\n第二行";
+  const plan = planReplay([{
+    type: "keyboard.text",
+    timestamp: "2026-07-04T10:00:01.000Z",
+    application: { processName: "Notepad.exe", pid: 202 },
+    window: { title: "Untitled - Notepad", hwnd: 101 },
+    input: { text, utf16Length: text.length, source: "vk_packet" },
+  }]);
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].kind, "type");
+  assert.equal(plan[0].text, text);
+
+  const actor = mockActor();
+  const outcome = await executeReplay(actor, plan, { stepDelayMs: 0 });
+  assert.equal(outcome.status, "succeeded");
+  const typeCall = actor.calls.find(([name]) => name === "typeText");
+  assert.equal(typeCall[1].text, text);
+  assert.deepEqual(
+    { hwnd: typeCall[1].expect.hwnd, pid: typeCall[1].expect.pid, titleExact: typeCall[1].expect.titleExact },
+    { hwnd: 101, pid: 202, titleExact: "Untitled - Notepad" },
+  );
+});
+
 test("executeReplay stops at needs_agent and resumes with startIndex", async () => {
   const actor = mockActor();
   const t = (s) => `2026-07-04T10:00:${String(s).padStart(2, "0")}.000Z`;
@@ -139,7 +173,9 @@ test("executeReplay stops at needs_agent and resumes with startIndex", async () 
   assert.equal(first.stoppedAt, 1);
   assert.equal(first.needsAgent.reason, "typed_text_redacted");
   const resumed = await executeReplay(actor, plan, { stepDelayMs: 0, startIndex: 2 });
-  assert.equal(resumed.completed, true);
+  assert.equal(resumed.completed, false);
+  assert.equal(resumed.rangeCompleted, true);
+  assert.equal(resumed.overallStatus, "partial");
   assert.equal(resumed.results[0].kind, "key");
 });
 
@@ -152,4 +188,59 @@ test("executeReplay stops on failure by default and enforces focus", async () =>
   assert.equal(outcome.completed, false);
   assert.equal(outcome.results[0].ok, false);
   assert.equal(actor.calls.some(([name]) => name === "click"), false);
+});
+
+test("unmapped VK_PACKET becomes needs_agent instead of a successful skip", async () => {
+  const events = Array.from({ length: 15 }, (_, index) => keyEvent({
+    ts: `2026-07-04T10:00:${String(index + 1).padStart(2, "0")}.000Z`,
+    vkCode: 231,
+    keyName: "VK_231",
+  }));
+  const plan = planReplay(events);
+  assert.equal(plan.length, 15);
+  assert.equal(plan.every((step) => step.kind === "needs_agent"), true);
+
+  const actor = mockActor();
+  const outcome = await executeReplay(actor, plan, { stepDelayMs: 0 });
+  assert.equal(outcome.status, "needs_agent");
+  assert.equal(outcome.completed, false);
+  assert.equal(outcome.needsAgentCount, 1);
+  assert.equal(actor.calls.length, 0);
+});
+
+test("continuing after a failure never reports the run as completed", async () => {
+  let keyCalls = 0;
+  const actor = mockActor({
+    key: async () => {
+      keyCalls += 1;
+      if (keyCalls === 1) throw new Error("injected failure");
+    },
+  });
+  const plan = [
+    { kind: "key", keys: "enter" },
+    { kind: "key", keys: "tab" },
+  ];
+  const outcome = await executeReplay(actor, plan, { stepDelayMs: 0, stopOnFailure: false });
+  assert.equal(keyCalls, 2);
+  assert.equal(outcome.status, "partial");
+  assert.equal(outcome.executionFinished, true);
+  assert.equal(outcome.completed, false);
+  assert.equal(outcome.failedCount, 1);
+  assert.equal(outcome.succeededCount, 1);
+});
+
+test("wheel direction is replayed when present and escalated when absent", async () => {
+  const timestamp = "2026-07-04T10:00:01.000Z";
+  const plan = planReplay([
+    { type: "mouse.wheel", timestamp, input: { x: 30, y: 40, wheelDelta: -240 } },
+    { type: "mouse.wheel", timestamp, input: { x: 30, y: 40 } },
+  ]);
+  assert.deepEqual(plan.map((step) => step.kind), ["scroll", "needs_agent"]);
+  assert.equal(plan[0].direction, "down");
+  assert.equal(plan[0].amount, 2);
+
+  const actor = mockActor();
+  const outcome = await executeReplay(actor, plan, { stepDelayMs: 0 });
+  assert.equal(outcome.status, "needs_agent");
+  assert.equal(actor.calls.some(([name]) => name === "scroll"), true);
 });

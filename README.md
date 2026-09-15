@@ -2,7 +2,7 @@
 
 一个本地优先的统一入口，把 Atria 的浏览器、Windows 桌面和工作流录制能力接给 Agent。
 
-当前版本是 **`0.1.0-public-preview` 私有预览包**：源码已经整理并上传到私有 GitHub 仓库，尚未公开，也不是一键安装器。它只包含首批三类能力：
+当前版本是 **`0.2.0-private.1` 私有候选包**：尚未公开，也不是一键安装器。它只包含首批三类能力：
 
 - 浏览器控制：通过本地 Browser Bridge 和 Chrome 扩展操作用户主动暴露的 Chrome。
 - Windows 桌面控制：通过 UI Automation 读取和操作原生 Windows 窗口。
@@ -44,6 +44,7 @@ README 面向使用者，说明用途、输入输出、依赖、体验和安全�
 cd atria-cli
 npm run doctor
 node .\bin\atria.mjs skills list
+npm test
 npm run verify
 ```
 
@@ -61,10 +62,18 @@ node .\bin\atria.mjs recording
 
 # 等价的显式路由写法
 node .\bin\atria.mjs mcp --capability browser
+
+# 可选：独立桌面动作提示与执行控制
+node .\bin\atria.mjs visual status
+node .\bin\atria.mjs visual enable
+node .\bin\atria.mjs visual enable --required
+node .\bin\atria.mjs automation pause
+node .\bin\atria.mjs automation resume
+node .\bin\atria.mjs automation stop
 ```
 
-CLI 只负责稳定路由，不复制底层引擎，也不会静默安装依赖、读取登录会话、导出 Cookie 或把生成的 Skill 写入用户的全局 Skill 目录。
+CLI 只负责稳定路由，不会静默安装依赖、读取登录会话、导出 Cookie 或把生成的 Skill 写入用户的全局 Skill 目录。`visual` 是可选的独立 Windows overlay；它与只在部分 MCP 宿主显示的 `event_stream_panel` widget 不同。关闭 visual 不影响执行能力。
 
 ## 当前边界
 
-浏览器组件可以优先作为独立公开项目继续推进；`record-replay-windows` 和 `atria-desktop` 仍需完成许可证、依赖和干净机器构建审查。当前预览没有自动更新器、Skill 市场、云端同步或完整安装器。发布前请以 [LICENSE-STATUS.md](LICENSE-STATUS.md) 和实际 `doctor` 结果为准。
+浏览器组件可以优先作为独立公开项目继续推进；`record-replay-windows`、`atria-desktop` 与原生二进制仍需完成许可证、依赖和干净机器构建审查。当前候选没有自动更新器、Skill 市场、云端同步或完整安装器。更新应替换一整套固定版本并核对 SHA-256；回退时恢复上一整套，保留包外的用户录制、令牌和配置。发布前请以 [LICENSE-STATUS.md](LICENSE-STATUS.md)、候选 manifest 和实际 `doctor` 结果为准。

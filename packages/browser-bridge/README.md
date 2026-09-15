@@ -44,6 +44,22 @@ cd atria-browser-bridge
 node mcp-server.js --standalone
 ```
 
+## What the user sees
+
+For a `computer` action the extension draws a click-through marker inside the
+exact tab being operated: target outline, cursor/ripple, a short action label,
+and the current lifecycle state. Background work is labelled with its tab id
+and a distinct color. The marker never generates a second click and it does not
+receive page input.
+
+Only safe summaries reach the marker. Typing is shown as a character count, not
+as the typed body. Coordinates are drawn only when they are known to be top-frame
+`viewport_css` coordinates; an iframe or restricted page falls back to a status
+message. A `computer` result includes `visual.available` and
+`visual.coordinatesRendered`, so an agent must not claim the user saw an action
+when injection was refused. Screenshot capture returns a real Chrome image or a
+`SCREENSHOT_UNAVAILABLE` error; it never substitutes a synthetic DOM picture.
+
 Health check:
 
 ```bash
@@ -153,7 +169,7 @@ curl -X POST http://127.0.0.1:47652/tools/call \
 ## Safety boundaries
 
 - **The bridge does not redact anything.** Page content is returned verbatim, form field values included — passwords, one-time codes and card numbers among them. Whatever is on the page reaches your agent, and therefore your model provider and your session logs. Drive it only on pages you would be willing to paste into a chat.
-- A visible on-page indicator shows when the agent is operating the browser.
+- A visible on-page indicator shows the action without rendering typed text. It cannot be injected into `chrome://` pages or every iframe.
 - Agent-opened tabs are grouped separately to avoid mixing with your own tabs.
 - It does **not** bypass CAPTCHAs, logins, security checks, anti-fraud, or paywalls.
 

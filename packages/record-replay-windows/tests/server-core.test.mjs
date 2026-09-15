@@ -205,6 +205,8 @@ test("parent operation ids deduplicate batch, replay, and composite type across 
       stop: async () => ({}),
     },
   });
+  const serviceBootId = server.actionCoordinator.bootId;
+  assert.notEqual(serviceBootId, actor.actorBootId);
   t.after(() => {
     server.closeRecorder();
     fs.rmSync(root, { recursive: true, force: true });
@@ -212,28 +214,28 @@ test("parent operation ids deduplicate batch, replay, and composite type across 
 
   const commonFeedback = { returnState: false, returnScreenshotPath: false };
   const batchInput = {
-    operationId: "fake-boot:parent-batch",
+    operationId: `${serviceBootId}:parent-batch`,
     actions: [{ action: "type", text: "once" }],
     expect: { titleExact: "Fixture Window" },
     ...commonFeedback,
   };
   const batches = await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.computer_batch.handler(batchInput)));
   assert.equal(counts.type, 1);
-  assert.ok(batches.every((result) => result.structuredContent.operationId === "fake-boot:parent-batch"));
+  assert.ok(batches.every((result) => result.structuredContent.operationId === batchInput.operationId));
   await server._registeredTools.computer_batch.handler(batchInput);
   assert.equal(counts.type, 1);
   await assert.rejects(
     server._registeredTools.computer_batch.handler({ ...batchInput, actions: [{ action: "type", text: "changed" }] }),
     (error) => error.code === "IDEMPOTENCY_CONFLICT",
   );
-  const batchStatus = await server._registeredTools.automation_status.handler({ operationId: "fake-boot:parent-batch" });
+  const batchStatus = await server._registeredTools.automation_status.handler({ operationId: batchInput.operationId });
   assert.equal(batchStatus.structuredContent.operation.state, "succeeded");
 
-  const replayInput = { operationId: "fake-boot:parent-replay", sessionID, stepDelayMs: 0 };
+  const replayInput = { operationId: `${serviceBootId}:parent-replay`, sessionID, stepDelayMs: 0 };
   const replays = await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.replay_run.handler(replayInput)));
   assert.equal(counts.focus, 1);
   assert.equal(counts.key, 1);
-  assert.ok(replays.every((result) => result.structuredContent.operationId === "fake-boot:parent-replay"));
+  assert.ok(replays.every((result) => result.structuredContent.operationId === replayInput.operationId));
   await assert.rejects(
     server._registeredTools.replay_run.handler({ ...replayInput, startIndex: 1 }),
     (error) => error.code === "IDEMPOTENCY_CONFLICT",
@@ -241,7 +243,7 @@ test("parent operation ids deduplicate batch, replay, and composite type across 
 
   const snapshot = await server._registeredTools.ui_snapshot.handler({});
   const typeInput = {
-    operationId: "fake-boot:parent-composite-type",
+    operationId: `${serviceBootId}:parent-composite-type`,
     text: "only once",
     elementIndex: 0,
     snapshotId: snapshot.structuredContent.snapshotId,
@@ -303,21 +305,41 @@ test("parent operations reject expired boot and mismatched session before dispat
     recorderClient: { sessionRoot: root, start: async () => ({}), status: async () => ({}), stop: async () => ({}) },
   });
   const server = createServer();
+  const serviceBootId = server.actionCoordinator.bootId;
+  assert.notEqual(serviceBootId, actor.actorBootId);
   t.after(() => {
     server.closeRecorder();
     fs.rmSync(root, { recursive: true, force: true });
   });
   const feedback = { returnState: false, returnScreenshotPath: false };
 
-  const batchInput = {
-    operationId: "boot-one:batch",
+  const initialBatchInput = {
     sessionId: "session-a",
     actions: [{ action: "type", text: "once" }],
     expect: { titleExact: "Fixture Window" },
     ...feedback,
   };
-  await server._registeredTools.computer_batch.handler(batchInput);
+  const initialBatch = await server._registeredTools.computer_batch.handler(initialBatchInput);
+  const batchInput = {
+    ...initialBatchInput,
+    operationId: initialBatch.structuredContent.operationId,
+  };
+  assert.ok(batchInput.operationId.startsWith(`${serviceBootId}:`));
+  assert.equal(batchInput.operationId.startsWith(`${actor.actorBootId}:`), false);
   assert.equal(counts.type, 1);
+
+  const serialRetry = await server._registeredTools.computer_batch.handler(batchInput);
+  assert.equal(serialRetry.structuredContent.operationId, batchInput.operationId);
+  assert.equal(counts.type, 1);
+
+  const retries = await Promise.all(Array.from(
+    { length: 100 },
+    () => server._registeredTools.computer_batch.handler(batchInput),
+  ));
+  assert.equal(counts.type, 1);
+  assert.ok(retries.every((result) => result.structuredContent.operationId === batchInput.operationId));
+  const currentStatus = await server._registeredTools.automation_status.handler({ operationId: batchInput.operationId });
+  assert.equal(currentStatus.structuredContent.operation.state, "succeeded");
   await assert.rejects(
     server._registeredTools.computer_batch.handler({ ...batchInput, sessionId: "session-b" }),
     (error) => error.code === "SESSION_MISMATCH",
@@ -336,7 +358,7 @@ test("parent operations reject expired boot and mismatched session before dispat
 
   const snapshot = await server._registeredTools.ui_snapshot.handler({});
   const compositeInput = {
-    operationId: "boot-two:composite",
+    operationId: `${serviceBootId}:composite`,
     text: "once",
     elementIndex: 0,
     snapshotId: snapshot.structuredContent.snapshotId,
@@ -351,7 +373,7 @@ test("parent operations reject expired boot and mismatched session before dispat
   );
   assert.deepEqual({ click: counts.click, type: counts.type }, { click: 1, type: 2 });
 
-  const replayInput = { operationId: "boot-three:replay", sessionID, stepDelayMs: 0 };
+  const replayInput = { operationId: `${serviceBootId}:replay`, sessionID, stepDelayMs: 0 };
   await server._registeredTools.replay_run.handler(replayInput);
   assert.deepEqual({ focus: counts.focus, key: counts.key }, { focus: 1, key: 1 });
   actor.actorBootId = "boot-four";
@@ -361,13 +383,21 @@ test("parent operations reject expired boot and mismatched session before dispat
   );
   assert.deepEqual({ focus: counts.focus, key: counts.key }, { focus: 1, key: 1 });
 
+  const currentActorBootInput = {
+    ...initialBatchInput,
+    operationId: `${serviceBootId}:same-actor-new-service`,
+  };
+  await server._registeredTools.computer_batch.handler(currentActorBootInput);
+  assert.equal(counts.type, 3);
+
   const replacementServer = createServer();
-  actor.actorBootId = "boot-five";
+  assert.notEqual(replacementServer.actionCoordinator.bootId, serviceBootId);
+  assert.equal(actor.actorBootId, "boot-four");
   await assert.rejects(
-    replacementServer._registeredTools.computer_batch.handler(batchInput),
-    (error) => error.code === "BOOT_MISMATCH",
+    replacementServer._registeredTools.computer_batch.handler(currentActorBootInput),
+    (error) => error.code === "BOOT_MISMATCH" && error.status === "unknown",
   );
-  assert.equal(counts.type, 2);
+  assert.equal(counts.type, 3);
   replacementServer.closeRecorder();
 });
 

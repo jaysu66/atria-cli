@@ -728,16 +728,34 @@ export function createEventStreamServer(options = {}) {
     maxEvents: options.maxActionEvents,
     visual: visualController,
   });
+  const serviceBootId = String(actionCoordinator.bootId);
   const parentOperations = new Map();
 
   function parentOperationStatus(operationId) {
     const operation = parentOperations.get(operationId);
     if (!operation) return null;
-    const currentActorBootId = actor.actorBootId || actionCoordinator.bootId;
+    const currentActorBootId = String(actor.actorBootId || serviceBootId);
+    if (operation.serviceBootId !== serviceBootId) {
+      return {
+        operationId,
+        tool: operation.tool,
+        sessionId: operation.sessionId,
+        state: "unknown",
+        createdAt: new Date(operation.createdAt).toISOString(),
+        settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
+        result: null,
+        error: {
+          code: "BOOT_MISMATCH",
+          message: "The parent operation belongs to an expired service boot and cannot be retried.",
+          status: "unknown",
+        },
+      };
+    }
     if (operation.actorBootId !== currentActorBootId) {
       return {
         operationId,
         tool: operation.tool,
+        sessionId: operation.sessionId,
         state: "unknown",
         createdAt: new Date(operation.createdAt).toISOString(),
         settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
@@ -767,13 +785,13 @@ export function createEventStreamServer(options = {}) {
 
   function runParentOperation(tool, input, sessionId, work) {
     if (typeof actor.ensureStarted === "function") actor.ensureStarted();
-    const actorBootId = String(actor.actorBootId || actionCoordinator.bootId);
+    const actorBootId = String(actor.actorBootId || serviceBootId);
     const boundSessionId = String(sessionId || actionCoordinator.defaultSessionId);
-    const operationId = input.operationId || actionCoordinator.newOperationId();
-    if (input.operationId && !operationId.startsWith(`${actorBootId}:`)) {
+    const operationId = input.operationId || `${serviceBootId}:${crypto.randomUUID()}`;
+    if (input.operationId && !operationId.startsWith(`${serviceBootId}:`)) {
       throw operationError(
         "BOOT_MISMATCH",
-        "The parent operationId belongs to an expired service or actor boot; it will not be re-executed.",
+        "The parent operationId belongs to an expired service boot; it will not be re-executed.",
         operationId,
         "unknown",
       );
@@ -781,6 +799,14 @@ export function createEventStreamServer(options = {}) {
     const fingerprint = requestFingerprint(tool, input);
     const existing = parentOperations.get(operationId);
     if (existing) {
+      if (existing.serviceBootId !== serviceBootId) {
+        throw operationError(
+          "BOOT_MISMATCH",
+          "The parent operationId belongs to an expired service boot; it will not be re-executed.",
+          operationId,
+          "unknown",
+        );
+      }
       if (existing.actorBootId !== actorBootId) {
         throw operationError(
           "BOOT_MISMATCH",
@@ -814,6 +840,7 @@ export function createEventStreamServer(options = {}) {
     }
     const operation = {
       tool,
+      serviceBootId,
       actorBootId,
       sessionId: boundSessionId,
       fingerprint,

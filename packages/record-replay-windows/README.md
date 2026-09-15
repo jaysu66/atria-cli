@@ -39,7 +39,9 @@ shows safe action labels, and does not render typed body text.
 
 Emergency tools are `automation_status`, `automation_pause`,
 `automation_resume`, and `automation_stop`. Global pause/stop hotkeys are also
-registered by the current overlay. There is no tray entry in this candidate.
+registered by the current overlay. The overlay also exposes tray commands for
+Pause/Resume and Stop. A per-user broker owns the single renderer shared by MCP
+clients and routes controls to the current operation owner.
 
 Example: open an empty test editor and ask the Agent to dry-run a plan that
 types “Atria test” without saving. Confirm the selected hwnd/title, enable
@@ -57,12 +59,17 @@ same complete set—never pair a newer JS protocol with older native programs.
 ## Privacy, tested scope and limits
 
 UI text, screenshots and recordings can contain private data and may enter an
-Agent/model session. Default text recording is redacted and becomes a
-`needs_agent` replay step; this is not a promise that every on-screen secret is
-hidden. Confirm send/delete/pay/publish and unsaved-close operations immediately
-before execution.
+Agent/model session. Default text recording is redacted and recording screenshots
+are off. Key-event screenshots require explicit `capturePolicy:"key_events"`
+with `redactText:false`; that opt-in can persist visible private content and is
+intended only for a prepared fixture. Redacted input becomes a `needs_agent`
+replay step. Confirm send/delete/pay/publish and unsaved-close operations
+immediately before execution.
 
-The private candidate passed Node and Rust suites plus a live Win32 overlay
-fixture on Windows. A clean Windows user/VM, two real Agent hosts, every DPI and
-negative-coordinate monitor arrangement, tray control, renderer singleton/
-reconnect, and overlay-free Agent screenshots remain separate release gates.
+The current remediation source passed Node and Rust suites on Windows. Broker
+singleton, reconnect and owner routing are covered with fake-renderer tests;
+tray command mapping is covered by Rust tests. The rebuilt native candidate has
+not yet been exercised with real input or a visible tray. A clean Windows
+user/VM, two real Agent hosts, every DPI and negative-coordinate monitor
+arrangement, live tray control, live cross-host renderer recovery, and
+overlay-free Agent screenshots remain separate release gates.

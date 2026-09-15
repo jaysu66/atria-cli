@@ -32,7 +32,7 @@ The Agent first reads numbered accessible controls, then acts on an index and ve
 
 ## Pause, stop, privacy
 
-Use `automation_pause`, `automation_resume`, and `automation_stop`. After pause is acknowledged, the Agent must not issue another write until resume. Before recording, close private windows and use `excludeApps`; recording covers the whole desktop. Screenshots and raw results stay on the local machine.
+Use `automation_pause`, `automation_resume`, and `automation_stop`. After pause is acknowledged, the Agent must not issue another write until resume. Before recording, close private windows and use `excludeApps`; recording covers the whole desktop. Recording screenshots are off by default. Explicit key-event screenshot capture requires `redactText:false` and may persist visible private content. Screenshots and raw results stay on the local machine.
 
 ## Update and rollback
 

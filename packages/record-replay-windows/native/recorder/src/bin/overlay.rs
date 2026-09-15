@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, Ellipse, EndPaint, FillRect,
     GetStockObject, Rectangle, RedrawWindow, SelectObject, SetBkMode, SetTextColor, HBRUSH,
@@ -22,20 +22,29 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_SHIFT,
 };
+use windows::Win32::UI::Shell::{
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetSystemMetrics, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
-    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, LWA_COLORKEY, MSG, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_APP, WM_DESTROY, WM_ERASEBKGND,
-    WM_HOTKEY, WM_NCHITTEST, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
+    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, KillTimer, LoadCursorW,
+    LoadIconW, PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW,
+    IDI_APPLICATION, LWA_COLORKEY, MF_STRING, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY,
+    WM_ERASEBKGND, WM_HOTKEY, WM_LBUTTONUP, WM_NCHITTEST, WM_PAINT, WM_RBUTTONUP, WM_TIMER,
+    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const WM_OVERLAY_INPUT: u32 = WM_APP + 41;
+const WM_TRAY_CALLBACK: u32 = WM_APP + 42;
 const TIMER_HIDE: usize = 1;
 const HOTKEY_PAUSE: i32 = 4101;
 const HOTKEY_STOP: i32 = 4102;
+const TRAY_ICON_ID: u32 = 4201;
+const TRAY_PAUSE_ID: usize = 4202;
+const TRAY_STOP_ID: usize = 4203;
 
 static QUEUE: OnceLock<Mutex<VecDeque<Value>>> = OnceLock::new();
 static STATE: OnceLock<Mutex<OverlayState>> = OnceLock::new();
@@ -47,6 +56,86 @@ struct OverlayState {
     virtual_left: i32,
     virtual_top: i32,
     visible: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RendererReadiness {
+    ready: bool,
+    degraded: bool,
+    issues: Vec<&'static str>,
+}
+
+fn renderer_readiness(
+    pause_hotkey: bool,
+    stop_hotkey: bool,
+    tray_available: bool,
+) -> RendererReadiness {
+    let mut issues = Vec::new();
+    if !pause_hotkey {
+        issues.push("PAUSE_HOTKEY_UNAVAILABLE");
+    }
+    if !stop_hotkey {
+        issues.push("STOP_HOTKEY_UNAVAILABLE");
+    }
+    if !tray_available {
+        issues.push("TRAY_UNAVAILABLE");
+    }
+    RendererReadiness {
+        ready: issues.is_empty(),
+        degraded: !issues.is_empty(),
+        issues,
+    }
+}
+
+fn tray_command(menu_id: usize) -> Option<&'static str> {
+    match menu_id {
+        TRAY_PAUSE_ID => Some("toggle_pause"),
+        TRAY_STOP_ID => Some("stop"),
+        _ => None,
+    }
+}
+
+fn tray_icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
+    let mut data = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_ICON_ID,
+        ..Default::default()
+    };
+    let tooltip: Vec<u16> = "Atria visual controls\0".encode_utf16().collect();
+    let length = tooltip.len().min(data.szTip.len());
+    data.szTip[..length].copy_from_slice(&tooltip[..length]);
+    data
+}
+
+unsafe fn add_tray_icon(hwnd: HWND) -> bool {
+    let Ok(icon) = LoadIconW(None, IDI_APPLICATION) else {
+        return false;
+    };
+    let mut data = tray_icon_data(hwnd);
+    data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    data.uCallbackMessage = WM_TRAY_CALLBACK;
+    data.hIcon = icon;
+    Shell_NotifyIconW(NIM_ADD, &data).as_bool()
+}
+
+unsafe fn remove_tray_icon(hwnd: HWND) {
+    let data = tray_icon_data(hwnd);
+    let _ = Shell_NotifyIconW(NIM_DELETE, &data);
+}
+
+unsafe fn show_tray_menu(hwnd: HWND) {
+    let Ok(menu) = CreatePopupMenu() else {
+        return;
+    };
+    let pause_added = AppendMenuW(menu, MF_STRING, TRAY_PAUSE_ID, w!("Pause / Resume")).is_ok();
+    let stop_added = AppendMenuW(menu, MF_STRING, TRAY_STOP_ID, w!("Stop")).is_ok();
+    let mut point = POINT::default();
+    if pause_added && stop_added && GetCursorPos(&mut point).is_ok() {
+        let _ = SetForegroundWindow(hwnd);
+        let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, point.x, point.y, None, hwnd, None);
+    }
+    let _ = DestroyMenu(menu);
 }
 
 impl Default for OverlayState {
@@ -98,6 +187,21 @@ fn event_point(event: &Value) -> Option<(i32, i32)> {
     Some((x, y))
 }
 
+fn is_click_action(action: &str) -> bool {
+    matches!(
+        action,
+        "click" | "double_click" | "double-click" | "doubleClick"
+    )
+}
+
+fn should_draw_click_ripple(event: &Value) -> bool {
+    event.get("phase").and_then(Value::as_str) == Some("input_dispatched")
+        && event
+            .get("action")
+            .and_then(Value::as_str)
+            .is_some_and(is_click_action)
+}
+
 unsafe fn draw_overlay(hwnd: HWND) {
     let mut paint = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut paint);
@@ -122,21 +226,32 @@ unsafe fn draw_overlay(hwnd: HWND) {
                 let local_x = x - state.virtual_left;
                 let local_y = y - state.virtual_top;
                 let action = event.get("action").and_then(Value::as_str).unwrap_or("");
-                let radius = if action == "click" { 28 } else { 20 };
-                let _ = Ellipse(
-                    hdc,
-                    local_x - radius,
-                    local_y - radius,
-                    local_x + radius,
-                    local_y + radius,
-                );
-                if action == "click" {
+                if is_click_action(action) {
+                    if should_draw_click_ripple(event) {
+                        let radius = 28;
+                        let _ = Ellipse(
+                            hdc,
+                            local_x - radius,
+                            local_y - radius,
+                            local_x + radius,
+                            local_y + radius,
+                        );
+                        let _ = Ellipse(
+                            hdc,
+                            local_x - radius - 10,
+                            local_y - radius - 10,
+                            local_x + radius + 10,
+                            local_y + radius + 10,
+                        );
+                    }
+                } else {
+                    let radius = 20;
                     let _ = Ellipse(
                         hdc,
-                        local_x - radius - 10,
-                        local_y - radius - 10,
-                        local_x + radius + 10,
-                        local_y + radius + 10,
+                        local_x - radius,
+                        local_y - radius,
+                        local_x + radius,
+                        local_y + radius,
                     );
                 }
                 if let Some(target) = event.get("target") {
@@ -188,6 +303,7 @@ unsafe fn draw_overlay(hwnd: HWND) {
             let _ = DrawTextW(hdc, &mut text, &mut text_rect, Default::default());
             rendered_event = Some(json!({
                 "type": "rendered",
+                "sessionId": event.get("sessionId").and_then(Value::as_str),
                 "operationId": event.get("operationId").and_then(Value::as_str),
                 "sequence": event.get("sequence").and_then(Value::as_u64),
                 "eventTimestamp": event.get("timestamp").and_then(Value::as_str),
@@ -300,11 +416,26 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_TRAY_CALLBACK => {
+            let event = lparam.0 as u32;
+            if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
+                show_tray_menu(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_COMMAND => {
+            let menu_id = wparam.0 & 0xffff;
+            if let Some(command) = tray_command(menu_id) {
+                emit(json!({ "type": "control", "command": command, "source": "tray" }));
+            }
+            LRESULT(0)
+        }
         WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
         WM_ERASEBKGND => LRESULT(1),
         WM_DESTROY => {
             let _ = UnregisterHotKey(Some(hwnd), HOTKEY_PAUSE);
             let _ = UnregisterHotKey(Some(hwnd), HOTKEY_STOP);
+            remove_tray_icon(hwnd);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -392,6 +523,8 @@ fn main() -> Result<()> {
             b'S' as u32,
         )
         .is_ok();
+        let tray_available = add_tray_icon(hwnd);
+        let readiness = renderer_readiness(pause_hotkey, stop_hotkey, tray_available);
 
         let hwnd_value = hwnd.0 as isize;
         thread::spawn(move || {
@@ -425,10 +558,14 @@ fn main() -> Result<()> {
         emit(json!({
             "type": "renderer-ready",
             "schemaVersion": 1,
+            "ready": readiness.ready,
+            "degraded": readiness.degraded,
+            "issues": readiness.issues,
             "pid": std::process::id(),
             "coordinateSpace": "desktop_physical",
             "virtualDesktop": { "left": left, "top": top, "width": width, "height": height },
             "hotkeys": { "pause": pause_hotkey, "stop": stop_hotkey },
+            "tray": { "available": tray_available, "pause": tray_available, "stop": tray_available },
             "timestamp": Utc::now().to_rfc3339(),
         }));
 
@@ -439,4 +576,71 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn click_ripple_requires_input_dispatched_phase() {
+        for phase in [
+            "prepare",
+            "running",
+            "failed",
+            "unknown",
+            "cancelled",
+            "verified",
+        ] {
+            assert!(!should_draw_click_ripple(&json!({
+                "action": "click",
+                "phase": phase,
+            })));
+        }
+        assert!(should_draw_click_ripple(&json!({
+            "action": "click",
+            "phase": "input_dispatched",
+        })));
+    }
+
+    #[test]
+    fn click_ripple_accepts_double_click_action_spellings_only_after_dispatch() {
+        for action in ["double_click", "double-click", "doubleClick"] {
+            assert!(should_draw_click_ripple(&json!({
+                "action": action,
+                "phase": "input_dispatched",
+            })));
+        }
+        assert!(!should_draw_click_ripple(&json!({
+            "action": "move",
+            "phase": "input_dispatched",
+        })));
+    }
+
+    #[test]
+    fn tray_menu_ids_map_only_to_supported_owner_controls() {
+        assert_eq!(tray_command(TRAY_PAUSE_ID), Some("toggle_pause"));
+        assert_eq!(tray_command(TRAY_STOP_ID), Some("stop"));
+        assert_eq!(tray_command(0), None);
+    }
+
+    #[test]
+    fn renderer_ready_state_exposes_hotkey_and_tray_degradation() {
+        assert_eq!(
+            renderer_readiness(true, true, true),
+            RendererReadiness {
+                ready: true,
+                degraded: false,
+                issues: vec![],
+            }
+        );
+        assert_eq!(
+            renderer_readiness(false, true, false),
+            RendererReadiness {
+                ready: false,
+                degraded: true,
+                issues: vec!["PAUSE_HOTKEY_UNAVAILABLE", "TRAY_UNAVAILABLE"],
+            }
+        );
+    }
 }

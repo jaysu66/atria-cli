@@ -36,4 +36,6 @@ Session files are stored under:
 
 Prefer the generated skill's semantic steps over raw coordinates. For browser workflows, use the event stream as evidence and prefer Browser/Chrome tooling for later execution when possible.
 
-The current standalone renderer has pause/stop hotkeys but no tray icon or cross-process renderer singleton. Do not claim that screenshots exclude the overlay or that every DPI/multi-monitor arrangement is verified unless the current release evidence proves it.
+Recording screenshots are deliberately off by default. Keep `capturePolicy:"off"` whenever text redaction is enabled. Key-event screenshots require explicit `capturePolicy:"key_events"` together with `redactText:false`; this may persist everything visible at those moments and should only be used in a prepared non-private fixture.
+
+The standalone renderer uses a per-user broker so multiple MCP clients share one renderer, and it provides pause/resume and stop through hotkeys and a tray menu. These lifecycle and command contracts are source- and unit-tested, not a substitute for live multi-host, tray, DPI, or screenshot-exclusion acceptance. Do not claim those paths are verified unless the current release evidence proves them.

@@ -16,8 +16,11 @@ function fakeActor() {
       sequence += 1;
       return `actor-boot:${sequence}`;
     },
+    waitForOperationSafety: async (operationId) => ({ operationId, safe: true, reason: "fixture_settled" }),
   };
 }
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("action coordinator emits the complete sanitized contract", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atria-events-"));
@@ -91,6 +94,7 @@ test("failure, timeout, and stop map to truthful terminal phases without idle ac
   for (const [code, expectedPhase] of [
     ["FOCUS_MISMATCH", "failed"],
     ["EXECUTION_TIMEOUT", "unknown"],
+    ["ACTOR_EXITED", "unknown"],
     ["ACTION_STOPPED", "cancelled"],
   ]) {
     await assert.rejects(coordinator.run("click", { x: 1, y: 2 }, async () => {
@@ -101,6 +105,62 @@ test("failure, timeout, and stop map to truthful terminal phases without idle ac
     assert.equal(coordinator.recentEvents(1)[0].phase, expectedPhase);
     await coordinator.resume();
   }
+});
+
+test("unknown actor outcome keeps the desktop lease until late safety confirmation", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atria-unknown-lock-"));
+  const lockPath = path.join(dir, "desktop.lock");
+  let resolveSafety;
+  const safety = new Promise((resolve) => { resolveSafety = resolve; });
+  const actor = {
+    ...fakeActor(),
+    waitForOperationSafety: () => safety,
+  };
+  const first = new ActionCoordinator(actor, { lockPath });
+  const second = new ActionCoordinator(fakeActor(), { lockPath });
+  t.after(() => {
+    resolveSafety?.({ safe: true });
+    first.close();
+    second.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const operationId = "actor-boot:unknown-write";
+  await assert.rejects(
+    first.run("click", { x: 1, y: 2 }, async () => {
+      const error = new Error("ACTOR_EXITED: outcome unknown");
+      error.code = "ACTOR_EXITED";
+      error.status = "unknown";
+      error.operationId = operationId;
+      throw error;
+    }, { operationId }),
+    (error) => error.status === "unknown",
+  );
+
+  await assert.rejects(
+    second.withWriteSession({ operationId: "contender" }, async () => {}),
+    (error) => error.code === "AUTOMATION_BUSY",
+  );
+  resolveSafety({ safe: true });
+  for (let attempt = 0; attempt < 50 && fs.existsSync(lockPath); attempt += 1) await wait(10);
+  assert.equal(fs.existsSync(lockPath), false);
+  await second.withWriteSession({ operationId: "after-safe" }, async () => {});
+});
+
+test("composite child operation ids are stable for a parent step", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "atria-child-id-"));
+  const coordinator = new ActionCoordinator(fakeActor(), { lockPath: path.join(dir, "desktop.lock") });
+  t.after(() => {
+    coordinator.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const context = { parentOperationId: "client-parent", stepIndex: 4 };
+  assert.equal(coordinator.operationIdForContext(context, "click"), coordinator.operationIdForContext(context, "click"));
+  assert.notEqual(
+    coordinator.operationIdForContext(context, "click"),
+    coordinator.operationIdForContext({ ...context, stepIndex: 5 }, "click"),
+  );
+  assert.notEqual(coordinator.operationIdForContext(context, "click"), coordinator.operationIdForContext(context, "window_focus"));
 });
 
 test("a separate process receives busy while another process owns the desktop lease", async (t) => {

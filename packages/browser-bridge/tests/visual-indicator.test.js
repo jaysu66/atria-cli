@@ -7,6 +7,27 @@ const vm = require('node:vm');
 const indicatorPath = path.join(__dirname, '..', 'extension', 'content', 'visual-indicator.js');
 const workerPath = path.join(__dirname, '..', 'extension', 'service-worker.js');
 
+function loadVisualCompletionHelpers() {
+  const source = fs.readFileSync(workerPath, 'utf8');
+  const startMarker = '// BEGIN_TESTABLE_VISUAL_COMPLETION';
+  const endMarker = '// END_TESTABLE_VISUAL_COMPLETION';
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker);
+  assert.notEqual(start, -1, 'visual completion helper start marker is present');
+  assert.notEqual(end, -1, 'visual completion helper end marker is present');
+  const context = { helpers: null };
+  vm.runInNewContext(
+    `${source.slice(start + startMarker.length, end)}\nhelpers = { readToolResultPayload, resolveVisualCompletionPhase };`,
+    context,
+    { filename: workerPath },
+  );
+  return context.helpers;
+}
+
+function contentResultForTest(payload) {
+  return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
+}
+
 class FakeStyle {
   constructor() {
     this.cssText = '';
@@ -178,4 +199,51 @@ test('service worker routes feedback and real screenshots to the exact requested
   assert.match(source, /syntheticFallbackUsed: false/);
   assert.doesNotMatch(source, /Synthetic DOM snapshot/);
   assert.match(source, /operationId: envelope\.operationId \|\| envelope\.id/);
+});
+
+test('ordinary dispatched input is not upgraded to verified or emitted twice', () => {
+  const { resolveVisualCompletionPhase } = loadVisualCompletionHelpers();
+  for (const payload of [
+    { clicked: true },
+    { pressed: true, key: 'Enter' },
+    { scrolled: true },
+    { typed: true },
+    { clicked: true, verified: null },
+  ]) {
+    assert.equal(resolveVisualCompletionPhase(contentResultForTest(payload), 'input_dispatched'), null);
+  }
+
+  const harness = createHarness();
+  harness.send({
+    type: 'atria.visual',
+    event: {
+      operationId: 'boot:plain-click:1',
+      action: 'left_click',
+      phase: 'input_dispatched',
+      target: { x: 42, y: 84 },
+      coordinateSpace: 'viewport_css',
+      frameId: 0,
+      tabId: 7,
+      active: true,
+    },
+  });
+  const label = findById(harness.host.shadowForTest, 'label');
+  assert.match(label.textContent, /已发出输入/);
+  assert.doesNotMatch(label.textContent, /已验证/);
+
+  const source = fs.readFileSync(workerPath, 'utf8');
+  assert.doesNotMatch(source, /emit\(result\?\.isError \? "failed" : "verified"/);
+  assert.match(source, /resolveVisualCompletionPhase\(result, lastVisualPhase\)/);
+});
+
+test('only explicit verification emits verified and errors still emit failed', () => {
+  const { readToolResultPayload, resolveVisualCompletionPhase } = loadVisualCompletionHelpers();
+  const verified = contentResultForTest({ clicked: true, verified: true });
+  assert.equal(readToolResultPayload(verified).verified, true);
+  assert.equal(resolveVisualCompletionPhase(verified, 'input_dispatched'), 'verified');
+  assert.equal(resolveVisualCompletionPhase(verified, 'verified'), null);
+
+  const failed = { isError: true, content: [{ type: 'text', text: 'click failed' }] };
+  assert.equal(resolveVisualCompletionPhase(failed, 'running'), 'failed');
+  assert.equal(resolveVisualCompletionPhase(failed, 'failed'), null);
 });

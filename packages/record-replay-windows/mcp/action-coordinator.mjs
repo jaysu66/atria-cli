@@ -35,6 +35,11 @@ function safeCode(error) {
   return match?.[1] || "ACTION_FAILED";
 }
 
+function isUnknownOutcome(error) {
+  if (error?.status === "unknown") return true;
+  return new Set(["EXECUTION_TIMEOUT", "EXECUTION_UNKNOWN", "ACTOR_EXITED", "ACTOR_CLOSING"]).has(safeCode(error));
+}
+
 function sanitizeTarget(action, params = {}) {
   const target = {};
   const integer = (value) => Number.isFinite(value) ? Math.round(Number(value)) : undefined;
@@ -133,6 +138,19 @@ export class ActionCoordinator {
   newOperationId() {
     if (typeof this.actor?.createOperationId === "function") return this.actor.createOperationId();
     return `${this.bootId}:${crypto.randomUUID()}`;
+  }
+
+  operationIdForContext(context = {}, action = "action") {
+    if (context.operationId) return context.operationId;
+    if (context.parentOperationId && Number.isInteger(context.stepIndex)) {
+      const bootId = this.actor?.actorBootId || this.bootId;
+      const digest = crypto.createHash("sha256")
+        .update(`${context.parentOperationId}\n${context.stepIndex}\n${action}`)
+        .digest("hex")
+        .slice(0, 32);
+      return `${bootId}:child:${digest}`;
+    }
+    return this.newOperationId();
   }
 
   onEvent(listener) {
@@ -254,10 +272,17 @@ export class ActionCoordinator {
   async withWriteSession(context, work) {
     if (this.controlState === "stopped") throw new AutomationControlError("stopped");
     const acquired = this.acquire(context);
+    const leaseState = context.leaseState || { unsafeOperationIds: new Set() };
     try {
-      return await work({ ...context, lockHeld: true });
+      return await work({ ...context, lockHeld: true, leaseState });
     } finally {
-      this.release(acquired);
+      const unsafeOperationIds = [...leaseState.unsafeOperationIds];
+      if (unsafeOperationIds.length === 0) {
+        this.release(acquired);
+      } else if (typeof this.actor?.waitForOperationSafety === "function") {
+        Promise.all(unsafeOperationIds.map((operationId) => this.actor.waitForOperationSafety(operationId)))
+          .then(() => this.release(acquired), () => {});
+      }
     }
   }
 
@@ -273,7 +298,7 @@ export class ActionCoordinator {
       await this.waitUntilRunnable();
       await this.visual?.beforeAction();
       if (typeof this.actor?.ensureStarted === "function") this.actor.ensureStarted();
-      const operationId = context.operationId || this.newOperationId();
+      const operationId = this.operationIdForContext(context, action);
       const actionContext = { ...heldContext, ...context, operationId };
       this.emit(action, "prepare", actionContext, params, { status: "pending" });
       const beforeCount = this.events.length;
@@ -294,10 +319,13 @@ export class ActionCoordinator {
         const operationEvents = this.events.slice(beforeCount).filter((event) => event.operationId === operationId);
         if (!operationEvents.some((event) => ["failed", "unknown", "cancelled"].includes(event.phase))) {
           const code = safeCode(error);
-          const phase = code === "EXECUTION_TIMEOUT" ? "unknown"
+          const phase = isUnknownOutcome(error) ? "unknown"
             : code === "ACTION_PAUSED" || code === "ACTION_STOPPED" ? "cancelled"
               : "failed";
           this.emit(action, phase, actionContext, params, { code });
+        }
+        if (isUnknownOutcome(error) && actionContext.leaseState?.unsafeOperationIds) {
+          actionContext.leaseState.unsafeOperationIds.add(error.operationId || operationId);
         }
         throw error;
       }
@@ -337,7 +365,9 @@ export class ActionCoordinator {
 
   close() {
     this.removeActorListener?.();
-    this.release({ token: this.lockToken });
+    if (this.lockToken && typeof this.actor?.waitForOperationSafety !== "function") {
+      this.release({ token: this.lockToken });
+    }
     this.visual?.close?.();
   }
 }

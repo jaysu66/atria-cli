@@ -38,6 +38,7 @@ Then replay with `replay_run` (always `dryRun: true` first).
 
 Non-negotiables:
 - Pass `excludeApps` so your own harness window is not recorded.
+- Leave `capturePolicy` unset (or set it to `off`) for the privacy-safe default. Key-event screenshots require the explicit combination `capturePolicy:"key_events"` and `redactText:false`; this can persist visible screen contents and must only be used in a prepared, non-private fixture.
 - Name the workflow **action-only**, in the **user's language**.
 - Never stop the desktop daemon while a recording is live.
 - Tell the user recording has started, then **wait** - do not poll in a tight loop.
@@ -67,8 +68,10 @@ Use this when the answer lives in an XHR/fetch JSON payload rather than in the r
 
 **Secrets are masked, not replayable.** Redacted text cannot be replayed deterministically; replay will stop with `needsAgent` at that step. If a workflow needs a credential, plan for the user to type it themselves at replay time.
 
+**Redaction is not image redaction.** The safe default records no key-event screenshots. Do not turn screenshot capture on while claiming `redactText:true`; the recorder rejects that unsafe combination before recording begins.
+
 ## Visual feedback and host limits
 
 Recording status inside `event_stream_panel` is a host widget and requires a host that renders MCP resources. The optional standalone overlay is a separate Windows helper: it shows execution cursor/ripple/status without requiring Atria, but it does not display recording history and does not prove an action succeeded. Use `visual_status`, `visual_enable`, and `visual_disable` through `atria-desktop`.
 
-This private candidate is tested on Windows 11 with Node.js 18+. Browser-native click recording, clean-machine installation, all DPI/display layouts, tray controls, and all-host widget rendering remain limitations. Check component protocol versions before recording or replaying.
+This private candidate is tested on Windows 11 with Node.js 18+. Per-user broker singleton/reconnect and tray command mapping are covered by automated tests, while live multi-host recovery and visible tray interaction remain unverified. Browser-native click recording, clean-machine installation, all DPI/display layouts, and all-host widget rendering also remain limitations. Check component protocol versions before recording or replaying.

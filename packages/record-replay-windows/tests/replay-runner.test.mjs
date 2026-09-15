@@ -133,6 +133,80 @@ test("executeReplay falls back to coordinates when uia find fails", async () => 
   assert.deepEqual({ x: clickCall[1].x, y: clickCall[1].y }, { x: 111, y: 222 });
 });
 
+test("executeReplay never coordinate-fallbacks after a UIA-resolved click was dispatched", async (t) => {
+  for (const [code, status] of [
+    ["EXECUTION_TIMEOUT", "unknown"],
+    ["ACTOR_EXITED", "unknown"],
+    ["PARTIAL_INPUT", "unknown"],
+  ]) {
+    await t.test(code, async () => {
+      const clickCalls = [];
+      const actor = mockActor({
+        click: async (params) => {
+          clickCalls.push(params);
+          const error = new Error(`${code}: outcome not final`);
+          error.code = code;
+          error.status = status;
+          error.operationId = `actor-boot:${code}`;
+          throw error;
+        },
+      });
+      const plan = planReplay([
+        clickEvent({ ts: "2026-07-04T10:00:01.000Z", x: 999, y: 999, uia: { name: "保存", automationId: "SaveBtn", className: "", controlType: "Button" } }),
+      ]);
+      const outcome = await executeReplay(actor, plan, { stepDelayMs: 0 });
+      assert.equal(clickCalls.length, 1);
+      assert.deepEqual({ x: clickCalls[0].x, y: clickCalls[0].y }, { x: 20, y: 20 });
+      assert.equal(outcome.completed, false);
+      assert.equal(outcome.status, "unknown");
+      assert.equal(outcome.failedCount, 0);
+      assert.equal(outcome.unknownCount, 1);
+      assert.equal(outcome.results[0].code, code);
+      assert.equal(outcome.results[0].operationId, `actor-boot:${code}`);
+    });
+  }
+});
+
+test("executeReplay preserves cancellation semantics and counters", async () => {
+  const actor = mockActor({
+    key: async () => {
+      const error = new Error("REQUEST_EXPIRED: queued write expired before execution");
+      error.code = "REQUEST_EXPIRED";
+      error.status = "cancelled";
+      error.operationId = "actor-boot:expired";
+      throw error;
+    },
+  });
+  const outcome = await executeReplay(actor, [{ kind: "key", keys: "enter" }], { stepDelayMs: 0 });
+  assert.equal(outcome.status, "cancelled");
+  assert.equal(outcome.cancelledCount, 1);
+  assert.equal(outcome.failedCount, 0);
+  assert.equal(outcome.results[0].code, "REQUEST_EXPIRED");
+  assert.equal(outcome.results[0].operationId, "actor-boot:expired");
+});
+
+test("executeReplay never continues automatically after an unknown outcome", async () => {
+  let keyCalls = 0;
+  const actor = mockActor({
+    key: async () => {
+      keyCalls += 1;
+      const error = new Error("ACTOR_EXITED: outcome unknown");
+      error.code = "ACTOR_EXITED";
+      error.status = "unknown";
+      error.operationId = "actor-boot:unknown";
+      throw error;
+    },
+  });
+  const outcome = await executeReplay(actor, [
+    { kind: "key", keys: "enter" },
+    { kind: "key", keys: "tab" },
+  ], { stepDelayMs: 0, stopOnFailure: false });
+  assert.equal(keyCalls, 1);
+  assert.equal(outcome.status, "unknown");
+  assert.equal(outcome.stoppedAt, 0);
+  assert.equal(outcome.nextIndex, 0);
+});
+
 test("recorded Unicode text including a surrogate pair and newline replays exactly", async () => {
   const text = "你好 Atria 😀\n第二行";
   const plan = planReplay([{

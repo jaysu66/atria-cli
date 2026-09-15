@@ -175,6 +175,26 @@ fn action_metadata(params: &Value) -> (&str, &str, &str, Option<&str>, Option<i6
     )
 }
 
+fn deadline_at_unix_ms(params: &Value) -> Option<i64> {
+    params
+        .get("_atria")
+        .and_then(|meta| meta.get("deadlineAtUnixMs"))
+        .and_then(Value::as_i64)
+}
+
+fn request_is_expired(params: &Value, now_unix_ms: i64) -> bool {
+    deadline_at_unix_ms(params).is_some_and(|deadline| now_unix_ms >= deadline)
+}
+
+fn check_request_deadline(params: &Value) -> Result<()> {
+    if request_is_expired(params, Utc::now().timestamp_millis()) {
+        return Err(anyhow!(
+            "REQUEST_EXPIRED: write request deadline elapsed before input dispatch"
+        ));
+    }
+    Ok(())
+}
+
 fn emit_action_event(
     request: &RpcRequest,
     phase: &str,
@@ -256,8 +276,20 @@ fn error_code(error: &anyhow::Error) -> &'static str {
         "FOCUS_MISMATCH"
     } else if text.contains("COORDINATE_OUTSIDE") {
         "COORDINATE_OUTSIDE_VIRTUAL_DESKTOP"
+    } else if text.contains("REQUEST_EXPIRED") {
+        "REQUEST_EXPIRED"
     } else {
         "ACTION_FAILED"
+    }
+}
+
+fn error_event_phase_status(code: &str) -> (&'static str, &'static str) {
+    if code == "REQUEST_EXPIRED" {
+        ("cancelled", "expired")
+    } else if code == "ACTION_STOPPED" || code == "ACTION_PAUSED" {
+        ("cancelled", "cancelled")
+    } else {
+        ("failed", "failed")
     }
 }
 
@@ -297,10 +329,12 @@ fn main() -> Result<()> {
             Ok(request) => {
                 let write = is_write_method(&request.method);
                 let result = if write {
-                    check_control(&request.params).and_then(|_| {
-                        emit_action_event(&request, "running", "running", None)?;
-                        handle_request(&request)
-                    })
+                    check_control(&request.params)
+                        .and_then(|_| check_request_deadline(&request.params))
+                        .and_then(|_| {
+                            emit_action_event(&request, "running", "running", None)?;
+                            handle_request(&request)
+                        })
                 } else {
                     handle_request(&request)
                 };
@@ -323,12 +357,8 @@ fn main() -> Result<()> {
                         }
                         Err(error) => {
                             let code = error_code(error);
-                            let phase = if code == "ACTION_STOPPED" || code == "ACTION_PAUSED" {
-                                "cancelled"
-                            } else {
-                                "failed"
-                            };
-                            emit_action_event(&request, phase, phase, Some(code))?;
+                            let (phase, status) = error_event_phase_status(code);
+                            emit_action_event(&request, phase, status, Some(code))?;
                         }
                     }
                 }
@@ -1993,5 +2023,31 @@ mod tests {
     #[test]
     fn minimized_window_sentinel_is_not_a_valid_desktop_point() {
         assert!(ensure_point_on_virtual_desktop(-32000, -32000).is_err());
+    }
+
+    #[test]
+    fn write_request_deadline_expires_at_boundary() {
+        let params = json!({ "_atria": { "deadlineAtUnixMs": 1_000 } });
+        assert!(!request_is_expired(&params, 999));
+        assert!(request_is_expired(&params, 1_000));
+        assert!(request_is_expired(&params, 1_001));
+    }
+
+    #[test]
+    fn missing_or_invalid_deadline_does_not_expire_request() {
+        assert!(!request_is_expired(&json!({}), i64::MAX));
+        assert!(!request_is_expired(
+            &json!({ "_atria": { "deadlineAtUnixMs": "soon" } }),
+            i64::MAX
+        ));
+    }
+
+    #[test]
+    fn expired_request_maps_to_cancelled_expired_terminal() {
+        let error =
+            anyhow!("REQUEST_EXPIRED: write request deadline elapsed before input dispatch");
+        let code = error_code(&error);
+        assert_eq!(code, "REQUEST_EXPIRED");
+        assert_eq!(error_event_phase_status(code), ("cancelled", "expired"));
     }
 }

@@ -25,6 +25,14 @@ function fingerprint(method, params) {
   return crypto.createHash("sha256").update(JSON.stringify(canonical({ method, params }))).digest("hex");
 }
 
+function markOperationSafe(operation, reason) {
+  if (!operation || operation.safe) return;
+  operation.safe = true;
+  operation.safeAt = Date.now();
+  operation.safeReason = reason;
+  operation.resolveSafety?.({ operationId: operation.id, safe: true, reason });
+}
+
 export class NativeOperationError extends Error {
   constructor(code, message, operationId, status = "failed") {
     super(message);
@@ -52,6 +60,7 @@ export class NativeActorClient {
     this.actorBootId = null;
     this.operations = new Map();
     this.eventListeners = new Set();
+    this.closing = false;
     this.controlPath = options.controlPath || path.join(os.tmpdir(), `atria-actor-control-${process.pid}-${crypto.randomUUID()}.txt`);
   }
 
@@ -73,25 +82,30 @@ export class NativeActorClient {
     if (!this.spawnActor && !fs.existsSync(this.nativePath)) {
       throw new Error(`Native actor not found at ${this.nativePath}. Run npm run build:native first.`);
     }
-    this.actorBootId = crypto.randomUUID();
-    this.operations.clear();
+    const spawnedBootId = crypto.randomUUID();
+    this.actorBootId = spawnedBootId;
+    this.closing = false;
     this.stderr = "";
     this.setControl("running");
-    this.proc = this.spawnActor
+    const spawnedProc = this.spawnActor
       ? this.spawnActor()
       : spawn(this.nativePath, ["--stdio"], {
           cwd: path.dirname(this.nativePath),
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
         });
-    this.proc.stderr.on("data", (chunk) => {
-      this.stderr += chunk.toString();
+    this.proc = spawnedProc;
+    let processStderr = "";
+    spawnedProc.stderr.on("data", (chunk) => {
+      processStderr += chunk.toString();
+      if (this.proc === spawnedProc) this.stderr = processStderr;
     });
-    this.proc.on("exit", (code, signal) => {
-      for (const pending of this.pending.values()) {
+    spawnedProc.on("exit", (code, signal) => {
+      for (const [operationId, pending] of this.pending) {
+        if (pending.operation.bootId !== spawnedBootId) continue;
         const error = new NativeOperationError(
           "ACTOR_EXITED",
-          `Native actor exited with code=${code} signal=${signal}. The dispatched operation outcome is unknown. ${this.stderr}`.trim(),
+          `Native actor exited with code=${code} signal=${signal}. The dispatched operation outcome is unknown. ${processStderr}`.trim(),
           pending.operation.id,
           "unknown",
         );
@@ -99,15 +113,16 @@ export class NativeActorClient {
         pending.operation.state = "unknown";
         pending.operation.error = error;
         pending.operation.settledAt = Date.now();
+        markOperationSafe(pending.operation, "actor_process_exited");
         if (pending.operation.promisePending) {
           pending.operation.promisePending = false;
           pending.reject(error);
         }
+        this.pending.delete(operationId);
       }
-      this.pending.clear();
-      this.proc = null;
+      if (this.proc === spawnedProc) this.proc = null;
     });
-    const rl = readline.createInterface({ input: this.proc.stdout });
+    const rl = readline.createInterface({ input: spawnedProc.stdout });
     rl.on("line", (line) => {
       let message;
       try {
@@ -126,6 +141,7 @@ export class NativeActorClient {
       clearTimeout(pending.timer);
       this.pending.delete(message.id);
       pending.operation.settledAt = Date.now();
+      markOperationSafe(pending.operation, "native_response_received");
       if (message.ok) {
         pending.operation.state = "succeeded";
         pending.operation.result = message.result;
@@ -135,9 +151,11 @@ export class NativeActorClient {
         }
       } else {
         const nativeCode = String(message.error || "").match(/\b([A-Z][A-Z0-9_]{2,})\b/)?.[1] || "ACTOR_FAILED";
-        const status = nativeCode === "ACTION_STOPPED" || nativeCode === "ACTION_PAUSED" ? "cancelled" : "failed";
+        const status = nativeCode === "ACTION_STOPPED" || nativeCode === "ACTION_PAUSED" || nativeCode === "REQUEST_EXPIRED"
+          ? "cancelled"
+          : "failed";
         const error = new NativeOperationError(nativeCode, message.error || "Native actor request failed", pending.operation.id, status);
-        pending.operation.state = "failed";
+        pending.operation.state = status;
         pending.operation.error = error;
         if (pending.operation.promisePending) {
           pending.operation.promisePending = false;
@@ -148,7 +166,6 @@ export class NativeActorClient {
   }
 
   request(method, params = {}, timeoutMs = DEFAULT_TIMEOUT_MS, options = {}) {
-    this.ensureStarted();
     const {
       operationId: inlineOperationId,
       sessionId: inlineSessionId,
@@ -156,22 +173,15 @@ export class NativeActorClient {
       stepIndex,
       ...nativeParams
     } = params || {};
-    const id = options.operationId || inlineOperationId || `${this.actorBootId}:${crypto.randomUUID()}`;
-    if (!id.startsWith(`${this.actorBootId}:`)) {
-      return Promise.reject(new NativeOperationError(
-        "BOOT_MISMATCH",
-        "The operationId belongs to an expired actor process; it will not be re-executed.",
-        id,
-      ));
-    }
+    const explicitOperationId = options.operationId || inlineOperationId || null;
     const currentFingerprint = fingerprint(method, nativeParams);
-    const existing = this.operations.get(id);
+    const existing = explicitOperationId ? this.operations.get(explicitOperationId) : null;
     if (existing) {
       if (existing.fingerprint !== currentFingerprint) {
         return Promise.reject(new NativeOperationError(
           "IDEMPOTENCY_CONFLICT",
           "The same operationId was reused with different actor arguments.",
-          id,
+          explicitOperationId,
         ));
       }
       if (existing.promisePending) return existing.promise;
@@ -179,8 +189,17 @@ export class NativeActorClient {
       return Promise.reject(existing.error || new NativeOperationError(
         "EXECUTION_UNKNOWN",
         "The actor operation is retained with an unknown outcome; query it instead of retrying.",
-        id,
+        explicitOperationId,
         existing.state === "unknown" ? "unknown" : "failed",
+      ));
+    }
+    this.ensureStarted();
+    const id = explicitOperationId || `${this.actorBootId}:${crypto.randomUUID()}`;
+    if (!id.startsWith(`${this.actorBootId}:`)) {
+      return Promise.reject(new NativeOperationError(
+        "BOOT_MISMATCH",
+        "The operationId belongs to an expired actor process; it will not be re-executed.",
+        id,
       ));
     }
     if (this.operations.size >= this.maxOperations) {
@@ -192,6 +211,7 @@ export class NativeActorClient {
     }
     const operation = {
       id,
+      bootId: this.actorBootId,
       method,
       fingerprint: currentFingerprint,
       state: "dispatched",
@@ -201,7 +221,16 @@ export class NativeActorClient {
       error: null,
       promisePending: true,
       promise: null,
+      safe: false,
+      safeAt: null,
+      safeReason: null,
+      safetyPromise: null,
+      resolveSafety: null,
     };
+    operation.safetyPromise = new Promise((resolve) => {
+      operation.resolveSafety = resolve;
+    });
+    const deadlineAtUnixMs = Date.now() + Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
     const body = {
       id,
       method,
@@ -211,6 +240,7 @@ export class NativeActorClient {
           bootId: this.actorBootId,
           sessionId: options.sessionId || inlineSessionId || "default",
           operationId: id,
+          deadlineAtUnixMs,
           ...(parentOperationId ? { parentOperationId } : {}),
           ...(Number.isInteger(stepIndex) ? { stepIndex } : {}),
           controlPath: this.controlPath,
@@ -251,7 +281,19 @@ export class NativeActorClient {
       settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
       result: operation.result,
       error: operation.error ? { code: operation.error.code, message: operation.error.message, status: operation.error.status } : null,
+      safe: operation.safe,
+      safeAt: operation.safeAt ? new Date(operation.safeAt).toISOString() : null,
+      safeReason: operation.safeReason,
     };
+  }
+
+  waitForOperationSafety(operationId) {
+    const operation = this.operations.get(operationId);
+    if (!operation) return Promise.resolve({ operationId, safe: true, reason: "operation_not_dispatched" });
+    if (operation.safe) {
+      return Promise.resolve({ operationId, safe: true, reason: operation.safeReason });
+    }
+    return operation.safetyPromise;
   }
 
   addEventListener(listener) {
@@ -370,13 +412,23 @@ export class NativeActorClient {
 
   close() {
     const proc = this.proc;
+    this.closing = true;
     try { this.setControl("stopped"); } catch (_error) {}
-    for (const { reject, timer } of this.pending.values()) {
+    for (const { reject, timer, operation } of this.pending.values()) {
       clearTimeout(timer);
-      reject(new Error("Native actor client closed."));
+      if (operation.promisePending) {
+        operation.promisePending = false;
+        operation.state = "unknown";
+        operation.settledAt = Date.now();
+        operation.error = new NativeOperationError(
+          "ACTOR_CLOSING",
+          "Native actor is closing; the dispatched operation outcome remains unknown until the process exits.",
+          operation.id,
+          "unknown",
+        );
+        reject(operation.error);
+      }
     }
-    this.pending.clear();
-    this.proc = null;
     if (proc) {
       try {
         proc.stdin?.end();
@@ -391,7 +443,14 @@ export class NativeActorClient {
         killTimer.unref?.();
       }
     }
-    try { fs.rmSync(this.controlPath, { force: true }); } catch (_error) {}
-    try { fs.rmSync(`${this.controlPath}.ack`, { force: true }); } catch (_error) {}
+    if (!proc) {
+      try { fs.rmSync(this.controlPath, { force: true }); } catch (_error) {}
+      try { fs.rmSync(`${this.controlPath}.ack`, { force: true }); } catch (_error) {}
+    } else {
+      proc.once("exit", () => {
+        try { fs.rmSync(this.controlPath, { force: true }); } catch (_error) {}
+        try { fs.rmSync(`${this.controlPath}.ack`, { force: true }); } catch (_error) {}
+      });
+    }
   }
 }

@@ -21,8 +21,8 @@
         "chrome-extension"
       ],
       "sourceOfTruth": "Atria/02-CLI与通用能力/browser-bridge",
-      "sourceCommit": "687ee0d9ac7fadbb418aca74fdd2a5d20daa17e0",
-      "sourceTreeHash": "7d546bc5d380bdbda9a9d0bef9784968013919f84a22ea0194fdb3f1aeb7a845",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceTreeHash": "79169d3391bdb29aa5742bd2042f343950718c5e4b46c48ae256cb2a1badbfb0",
       "protocolVersion": 3
     },
     {
@@ -44,8 +44,8 @@
         "windows-ui-access"
       ],
       "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows",
-      "sourceCommit": "bb2bb425093757abab8b6ec7ca457231e24f6e60",
-      "sourceTreeHash": "2699a2964d620f019f497367d8e0e0fa7c2c9f902c229babf3fefc4ea6a6f1e8",
+      "sourceCommit": "a7a888ca52e2da1afa82184900c7e195589d3820",
+      "sourceTreeHash": "00dacc853114a17d65b9b26e46f880c1e6ea16a92c78cf90cbd3a936deee1724",
       "protocolVersion": 2
     },
     {
@@ -64,7 +64,7 @@
       ],
       "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-desktop",
       "sourceCommit": null,
-      "sourceTreeHash": "84fffd26e784ead56c0e30962d92643b61b37e2e7c02cddd7bc371b920c67ff6",
+      "sourceTreeHash": "6eefd85aeedfda0af72008cce5e289641879d4d2d615321acfb74c49f61a4a8f",
       "protocolVersion": 2
     },
     {
@@ -84,7 +84,7 @@
       ],
       "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-recording",
       "sourceCommit": null,
-      "sourceTreeHash": "406e149718a9c28a32ed6cae7238e0913937667a31731dee68ebdcded1a3fd5d",
+      "sourceTreeHash": "49ff9c6b143a4d8da258ac5e3f5babe4f2e750a318f381bf5876f780c0e18198",
       "protocolVersion": 2
     },
     {
@@ -104,6 +104,6 @@
       "sourceOfTruth": "Atria/02-CLI与通用能力/atria-cli/skills/atria-cli-overview"
     }
   ],
-  "version": "0.2.0-private.1",
-  "generatedAt": "2026-09-15T06:42:44.250Z"
+  "version": "0.2.0-private.2",
+  "generatedAt": "2026-09-15T10:22:32.140Z"
 }

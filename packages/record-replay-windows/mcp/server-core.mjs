@@ -23,6 +23,28 @@ const STATUS_PANEL_URI = "ui://widget/record-replay-windows-status-panel.html";
 const DEFAULT_PANEL_CONTROL_PORT = 47874;
 const PANEL_CONTROL_PORT_COUNT = 6;
 const MAX_EVENTS_FOR_SAMPLING = 60;
+const MAX_PARENT_OPERATIONS = 256;
+
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+  }
+  return value;
+}
+
+function requestFingerprint(tool, input = {}) {
+  const { operationId: _operationId, ...args } = input;
+  return crypto.createHash("sha256").update(JSON.stringify(canonical({ tool, args }))).digest("hex");
+}
+
+function operationError(code, message, operationId, status = "failed") {
+  const error = new Error(message);
+  error.code = code;
+  error.operationId = operationId;
+  error.status = status;
+  return error;
+}
 
 function asToolResult(result, { widget = false, isError = false } = {}) {
   return {
@@ -581,7 +603,7 @@ export function createEventStreamServer(options = {}) {
   };
   const startRecording = async (input = {}) => remember(await recorder.start({
     maxDurationSeconds: input.maxDurationSeconds ?? 1800,
-    capturePolicy: input.capturePolicy ?? "key_events",
+    capturePolicy: input.capturePolicy ?? "off",
     installSkillOnStop: input.installSkillOnStop ?? true,
     redactText: input.redactText ?? true,
     excludeApps: input.excludeApps ?? [],
@@ -706,6 +728,75 @@ export function createEventStreamServer(options = {}) {
     maxEvents: options.maxActionEvents,
     visual: visualController,
   });
+  const parentOperations = new Map();
+
+  function parentOperationStatus(operationId) {
+    const operation = parentOperations.get(operationId);
+    if (!operation) return null;
+    return {
+      operationId,
+      tool: operation.tool,
+      state: operation.state,
+      createdAt: new Date(operation.createdAt).toISOString(),
+      settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
+      result: operation.result?.structuredContent || operation.result || null,
+      error: operation.error ? {
+        code: operation.error.code || "ACTION_FAILED",
+        message: operation.error.message,
+        status: operation.error.status || "failed",
+      } : null,
+    };
+  }
+
+  function runParentOperation(tool, input, work) {
+    const operationId = input.operationId || actionCoordinator.newOperationId();
+    const fingerprint = requestFingerprint(tool, input);
+    const existing = parentOperations.get(operationId);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw operationError(
+          "IDEMPOTENCY_CONFLICT",
+          `The same parent operationId was reused with different ${tool} arguments.`,
+          operationId,
+        );
+      }
+      return { operationId, promise: existing.promise };
+    }
+    if (parentOperations.size >= MAX_PARENT_OPERATIONS) {
+      throw operationError(
+        "CAPACITY_REACHED",
+        "Parent operation capacity reached for this server boot; new work is refused to preserve idempotency.",
+        operationId,
+      );
+    }
+    const operation = {
+      tool,
+      fingerprint,
+      state: "running",
+      createdAt: Date.now(),
+      settledAt: null,
+      result: null,
+      error: null,
+      promise: null,
+    };
+    operation.promise = Promise.resolve()
+      .then(() => work(operationId))
+      .then((result) => {
+        operation.result = result;
+        operation.settledAt = Date.now();
+        const content = result?.structuredContent || result || {};
+        operation.state = content.status
+          || (content.completed === false ? "failed" : "succeeded");
+        return result;
+      }, (error) => {
+        operation.error = error;
+        operation.settledAt = Date.now();
+        operation.state = error?.status || "failed";
+        throw error;
+      });
+    parentOperations.set(operationId, operation);
+    return { operationId, promise: operation.promise };
+  }
   visualController.setControlHandler(async (command) => {
     if (command === "stop") return actionCoordinator.stop();
     if (command === "toggle_pause") {
@@ -844,7 +935,7 @@ export function createEventStreamServer(options = {}) {
     "event_stream_start",
     {
       title: "Start Event Stream Recording",
-      description: "Start recording a Windows desktop workflow. All parameters are optional and a status panel is rendered.",
+      description: "Start recording a Windows desktop workflow. Screenshots default to off. capturePolicy=key_events requires redactText=false and may persist visible screen content. All parameters are optional and a status panel is rendered.",
       inputSchema: {
         maxDurationSeconds: z.number().int().positive().max(7200).optional(),
         capturePolicy: z.enum(["key_events", "off"]).optional(),
@@ -1089,25 +1180,29 @@ export function createEventStreamServer(options = {}) {
     },
     async (input = {}) => {
       if (Number.isInteger(input.elementIndex)) {
-        const target = resolveTarget(input);
-        const parentOperationId = input.operationId || actionCoordinator.newOperationId();
         const sessionId = input.sessionId;
-        const result = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async () => {
-          await runWrite("click", { x: target.x, y: target.y, expect: boundExpect(input, target) }, {
-            lockHeld: true,
-            parentOperationId,
-            stepIndex: 0,
-            sessionId,
+        const parent = runParentOperation("computer_type_composite", input, async (parentOperationId) => {
+          const target = resolveTarget(input);
+          const result = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async (heldContext) => {
+            await runWrite("click", { x: target.x, y: target.y, expect: boundExpect(input, target) }, {
+              lockHeld: true,
+              leaseState: heldContext.leaseState,
+              parentOperationId,
+              stepIndex: 0,
+              sessionId,
+            });
+            await new Promise((r) => setTimeout(r, 120));
+            return runWrite("type", { text: input.text, clearFirst: input.clearFirst, expect: boundExpect(input) }, {
+              lockHeld: true,
+              leaseState: heldContext.leaseState,
+              parentOperationId,
+              stepIndex: 1,
+              sessionId,
+            });
           });
-          await new Promise((r) => setTimeout(r, 120));
-          return runWrite("type", { text: input.text, clearFirst: input.clearFirst, expect: boundExpect(input) }, {
-            lockHeld: true,
-            parentOperationId,
-            stepIndex: 1,
-            sessionId,
-          });
+          return asToolResult({ ...result, parentOperationId, ...(await afterAction(input)) });
         });
-        return asToolResult({ ...result, parentOperationId, ...(await afterAction(input)) });
+        return parent.promise;
       }
       const result = await runWrite("type", { text: input.text, clearFirst: input.clearFirst, expect: boundExpect(input) }, actionContext(input));
       return asToolResult({ ...result, ...(await afterAction(input)) });
@@ -1204,46 +1299,64 @@ export function createEventStreamServer(options = {}) {
       },
     },
     async (input = {}) => {
-      const results = [];
-      const parentOperationId = input.operationId || actionCoordinator.newOperationId();
       const sessionId = input.sessionId;
-      const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async () => {
-        for (const [idx, step] of (input.actions || []).entries()) {
-          try {
-            await actionCoordinator.waitUntilRunnable();
-            const context = { lockHeld: true, parentOperationId, stepIndex: idx, sessionId };
-            if (step.action === "wait") {
-              await new Promise((r) => setTimeout(r, step.ms || 500));
-              results.push({ idx, action: "wait", ok: true });
-            } else if (step.action === "click") {
-              const t = resolveTarget({ ...step, snapshotId: input.snapshotId });
-              const actionResult = await runWrite("click", { x: t.x, y: t.y, button: step.button, clicks: step.clicks, expect: boundExpect(input, t) }, context);
-              results.push({ idx, action: "click", ok: true, operationId: actionResult.operationId, at: { x: t.x, y: t.y } });
-            } else if (step.action === "move") {
-              const t = resolveTarget({ ...step, snapshotId: input.snapshotId });
-              const actionResult = await runWrite("move", { x: t.x, y: t.y, expect: boundExpect(input, t) }, context);
-              results.push({ idx, action: "move", ok: true, operationId: actionResult.operationId });
-            } else if (step.action === "type") {
-              const actionResult = await runWrite("type", { text: step.text || "", clearFirst: step.clearFirst, expect: boundExpect(input) }, context);
-              results.push({ idx, action: "type", ok: true, operationId: actionResult.operationId });
-            } else if (step.action === "key") {
-              const actionResult = await runWrite("key", { keys: step.keys || "", expect: boundExpect(input) }, context);
-              results.push({ idx, action: "key", ok: true, operationId: actionResult.operationId });
-            } else if (step.action === "scroll") {
-              let at = {};
-              try { const t = resolveTarget({ ...step, snapshotId: input.snapshotId }); at = { x: t.x, y: t.y, window: t.window }; } catch (_) {}
-              const actionResult = await runWrite("scroll", { x: at.x, y: at.y, direction: step.direction, amount: step.amount, expect: boundExpect(input, at.window ? at : null) }, context);
-              results.push({ idx, action: "scroll", ok: true, operationId: actionResult.operationId });
+      const parent = runParentOperation("computer_batch", input, async (parentOperationId) => {
+        const results = [];
+        const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async (heldContext) => {
+          for (const [idx, step] of (input.actions || []).entries()) {
+            try {
+              await actionCoordinator.waitUntilRunnable();
+              const context = { lockHeld: true, leaseState: heldContext.leaseState, parentOperationId, stepIndex: idx, sessionId };
+              if (step.action === "wait") {
+                await new Promise((r) => setTimeout(r, step.ms || 500));
+                results.push({ idx, action: "wait", ok: true });
+              } else if (step.action === "click") {
+                const t = resolveTarget({ ...step, snapshotId: input.snapshotId });
+                const actionResult = await runWrite("click", { x: t.x, y: t.y, button: step.button, clicks: step.clicks, expect: boundExpect(input, t) }, context);
+                results.push({ idx, action: "click", ok: true, operationId: actionResult.operationId, at: { x: t.x, y: t.y } });
+              } else if (step.action === "move") {
+                const t = resolveTarget({ ...step, snapshotId: input.snapshotId });
+                const actionResult = await runWrite("move", { x: t.x, y: t.y, expect: boundExpect(input, t) }, context);
+                results.push({ idx, action: "move", ok: true, operationId: actionResult.operationId });
+              } else if (step.action === "type") {
+                const actionResult = await runWrite("type", { text: step.text || "", clearFirst: step.clearFirst, expect: boundExpect(input) }, context);
+                results.push({ idx, action: "type", ok: true, operationId: actionResult.operationId });
+              } else if (step.action === "key") {
+                const actionResult = await runWrite("key", { keys: step.keys || "", expect: boundExpect(input) }, context);
+                results.push({ idx, action: "key", ok: true, operationId: actionResult.operationId });
+              } else if (step.action === "scroll") {
+                let at = {};
+                try { const t = resolveTarget({ ...step, snapshotId: input.snapshotId }); at = { x: t.x, y: t.y, window: t.window }; } catch (_) {}
+                const actionResult = await runWrite("scroll", { x: at.x, y: at.y, direction: step.direction, amount: step.amount, expect: boundExpect(input, at.window ? at : null) }, context);
+                results.push({ idx, action: "scroll", ok: true, operationId: actionResult.operationId });
+              }
+              await new Promise((r) => setTimeout(r, 120));
+            } catch (error) {
+              const code = error.code || "ACTION_FAILED";
+              const status = error.status === "unknown" || ["EXECUTION_TIMEOUT", "EXECUTION_UNKNOWN", "ACTOR_EXITED", "ACTOR_CLOSING"].includes(code)
+                ? "unknown"
+                : error.status === "cancelled" || ["ACTION_STOPPED", "ACTION_PAUSED", "REQUEST_EXPIRED"].includes(code)
+                  ? "cancelled"
+                  : "failed";
+              results.push({
+                idx,
+                action: step.action,
+                ok: false,
+                status,
+                code,
+                ...(error.operationId ? { operationId: error.operationId } : {}),
+              });
+              return { completed: false, stoppedAt: idx, results };
             }
-            await new Promise((r) => setTimeout(r, 120));
-          } catch (error) {
-            results.push({ idx, action: step.action, ok: false, code: error.code || "ACTION_FAILED" });
-            return { completed: false, stoppedAt: idx, results };
           }
-        }
-        return { completed: true, results };
+          return { completed: true, results };
+        });
+        const status = outcome.completed
+          ? "succeeded"
+          : outcome.results.at(-1)?.status || (outcome.results.at(-1)?.code === "ACTION_STOPPED" ? "cancelled" : "failed");
+        return asToolResult({ ...outcome, status, operationId: parentOperationId, ...(await afterAction(input)) }, { isError: !outcome.completed });
       });
-      return asToolResult({ ...outcome, operationId: parentOperationId, ...(await afterAction(input)) }, { isError: !outcome.completed });
+      return parent.promise;
     },
   );
 
@@ -1325,8 +1438,9 @@ export function createEventStreamServer(options = {}) {
     },
     async (input = {}) => asToolResult({
       ...actionCoordinator.status(),
-      operation: input.operationId && typeof actor.operationStatus === "function"
-        ? actor.operationStatus(input.operationId)
+      operation: input.operationId
+        ? parentOperationStatus(input.operationId)
+          || (typeof actor.operationStatus === "function" ? actor.operationStatus(input.operationId) : null)
         : null,
     }),
   );
@@ -1435,33 +1549,40 @@ export function createEventStreamServer(options = {}) {
           plan,
         });
       }
-      const parentOperationId = input.operationId || actionCoordinator.newOperationId();
       const sessionId = input.sessionId || session.sessionID;
-      const replayActor = {
-        uiaFind: (params) => actor.uiaFind(params),
-        screenshot: (params) => actor.screenshot(params),
-      };
-      for (const [method, action] of [
-        ["windowFocus", "window_focus"],
-        ["click", "click"],
-        ["key", "key"],
-        ["typeText", "type"],
-        ["scroll", "scroll"],
-      ]) {
-        replayActor[method] = (params = {}) => {
-          const { _actionStepIndex, ...cleanParams } = params;
-          return runWrite(action, cleanParams, {
-            lockHeld: true,
-            parentOperationId,
-            stepIndex: Number.isInteger(_actionStepIndex) ? _actionStepIndex : undefined,
-            sessionId,
-          });
+      const parent = runParentOperation("replay_run", input, async (parentOperationId) => {
+        const replayActor = {
+          uiaFind: (params) => actor.uiaFind(params),
+          screenshot: (params) => actor.screenshot(params),
         };
-      }
-      const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, () => executeReplay(replayActor, plan, input));
-      const result = { sessionID: session.sessionID, planLength: plan.length, operationId: parentOperationId, ...outcome };
-      const isError = ["failed", "partial", "unknown", "cancelled"].includes(outcome.status);
-      return asToolResult(result, { isError });
+        let heldLeaseState = null;
+        for (const [method, action] of [
+          ["windowFocus", "window_focus"],
+          ["click", "click"],
+          ["key", "key"],
+          ["typeText", "type"],
+          ["scroll", "scroll"],
+        ]) {
+          replayActor[method] = (params = {}) => {
+            const { _actionStepIndex, ...cleanParams } = params;
+            return runWrite(action, cleanParams, {
+              lockHeld: true,
+              leaseState: heldLeaseState,
+              parentOperationId,
+              stepIndex: Number.isInteger(_actionStepIndex) ? _actionStepIndex : undefined,
+              sessionId,
+            });
+          };
+        }
+        const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, (heldContext) => {
+          heldLeaseState = heldContext.leaseState;
+          return executeReplay(replayActor, plan, input);
+        });
+        const result = { sessionID: session.sessionID, planLength: plan.length, operationId: parentOperationId, ...outcome };
+        const isError = ["failed", "partial", "unknown", "cancelled"].includes(outcome.status);
+        return asToolResult(result, { isError });
+      });
+      return parent.promise;
     },
   );
 

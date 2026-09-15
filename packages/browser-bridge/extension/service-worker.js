@@ -75,6 +75,30 @@ function toolError(message, extra) {
   };
 }
 
+// BEGIN_TESTABLE_VISUAL_COMPLETION
+function readToolResultPayload(result) {
+  if (!result || !Array.isArray(result.content)) return null;
+  for (const item of result.content) {
+    if (item?.type !== "text" || typeof item.text !== "string") continue;
+    try {
+      const payload = JSON.parse(item.text);
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) return payload;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function resolveVisualCompletionPhase(result, lastPhase) {
+  if (result?.isError) return lastPhase === "failed" ? null : "failed";
+  const payload = readToolResultPayload(result);
+  if (payload?.verified === true) return lastPhase === "verified" ? null : "verified";
+  // Dispatch is a fact; success of the page-side outcome is not. The action
+  // already emitted input_dispatched at the actual CDP boundary, so ordinary
+  // click/key/scroll calls must neither duplicate it nor upgrade it to verified.
+  return null;
+}
+// END_TESTABLE_VISUAL_COMPLETION
+
 async function getClientId() {
   if (clientIdPromise) return clientIdPromise;
   clientIdPromise = (async () => {
@@ -1340,8 +1364,14 @@ async function executeTool(name, args, context = {}) {
     let visualTarget = action === "type"
       ? { kind: "text", textLength: String(args.text || "").length }
       : { kind: args.ref ? "ref" : "coordinate" };
-    const emit = (phase, target = visualTarget, options = {}) =>
-      emitBrowserVisual(tab, operationContext, action, phase, target, options);
+    let lastVisualPhase = null;
+    let lastVisualResult = null;
+    const emit = async (phase, target = visualTarget, options = {}) => {
+      const visualResult = await emitBrowserVisual(tab, operationContext, action, phase, target, options);
+      lastVisualPhase = phase;
+      lastVisualResult = visualResult;
+      return visualResult;
+    };
     if (action !== "screenshot") await emit("prepare", visualTarget, { coordinatesTrusted: false });
     try {
       const result = await (async () => {
@@ -1600,10 +1630,13 @@ async function executeTool(name, args, context = {}) {
       }
       return toolError(`Unsupported computer action: ${action}`);
       })();
-      const visualResult = await emit(result?.isError ? "failed" : "verified", visualTarget, {
-        outcome: result?.isError ? "failed" : "succeeded"
-      });
-      return attachVisualMetadata(result, visualResult);
+      const completionPhase = resolveVisualCompletionPhase(result, lastVisualPhase);
+      if (completionPhase) {
+        lastVisualResult = await emit(completionPhase, visualTarget, {
+          outcome: completionPhase === "failed" ? "failed" : "succeeded"
+        });
+      }
+      return lastVisualResult ? attachVisualMetadata(result, lastVisualResult) : result;
     } catch (error) {
       await emit("failed", visualTarget, { outcome: "failed" });
       throw error;

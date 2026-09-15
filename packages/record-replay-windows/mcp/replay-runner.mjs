@@ -229,6 +229,7 @@ async function ensureFocus(actor, step, state, stepIndex) {
 
 async function executeClick(actor, step, expect, stepIndex) {
   if (step.uia) {
+    let clickTarget = null;
     try {
       const locator = {
         scopeTitle: step.windowTitle || undefined,
@@ -244,12 +245,16 @@ async function executeClick(actor, step, expect, stepIndex) {
         if (r > l && b > t) {
           const cx = Math.round((l + r) / 2);
           const cy = Math.round((t + b) / 2);
-          await actor.click({ x: cx, y: cy, button: step.button, expect, _actionStepIndex: stepIndex });
-          return { ok: true, method: "uia", at: { x: cx, y: cy } };
+          clickTarget = { x: cx, y: cy };
         }
       }
     } catch (_error) {
-      // UIA 失败退坐标
+      // Only localization may fall back. Once click dispatch begins, its error
+      // must propagate because retrying at recorded coordinates can double-click.
+    }
+    if (clickTarget) {
+      await actor.click({ ...clickTarget, button: step.button, expect, _actionStepIndex: stepIndex });
+      return { ok: true, method: "uia", at: clickTarget };
     }
   }
   await actor.click({ x: step.x, y: step.y, button: step.button, expect, _actionStepIndex: stepIndex });
@@ -264,15 +269,24 @@ function summarizeReplay(plan, startIndex, results, {
 } = {}) {
   const plannedCount = Math.max(0, plan.length - startIndex);
   const succeededCount = results.filter((result) => result.ok === true && result.method !== "skipped").length;
-  const failedCount = results.filter((result) => result.ok === false && result.kind !== "needs_agent").length;
+  const unknownCount = results.filter((result) => result.status === "unknown").length;
+  const cancelledCount = results.filter((result) => result.status === "cancelled").length;
+  const failedCount = results.filter((result) => result.ok === false
+    && result.kind !== "needs_agent"
+    && result.status !== "unknown"
+    && result.status !== "cancelled").length;
   const skippedCount = results.filter((result) => result.method === "skipped").length;
   const needsAgentCount = results.filter((result) => result.kind === "needs_agent").length;
   const attemptedCount = results.filter((result) => result.kind !== "needs_agent" && result.method !== "skipped").length;
-  const unresolvedCount = failedCount + skippedCount + needsAgentCount;
+  const unresolvedCount = failedCount + unknownCount + cancelledCount + skippedCount + needsAgentCount;
   const rangeCompleted = Boolean(executionFinished) && unresolvedCount === 0 && results.length === plannedCount;
   const completed = rangeCompleted && startIndex === 0;
   const nextIndex = Number.isInteger(stoppedAt) ? stoppedAt : startIndex + results.length;
-  const resolvedStatus = status || (rangeCompleted ? "succeeded" : failedCount > 0 ? "partial" : "unknown");
+  const resolvedStatus = status || (rangeCompleted ? "succeeded"
+    : unknownCount > 0 ? "unknown"
+      : cancelledCount > 0 ? "cancelled"
+        : failedCount > 0 ? "partial"
+          : "unknown");
 
   return {
     status: resolvedStatus,
@@ -287,6 +301,8 @@ function summarizeReplay(plan, startIndex, results, {
     attemptedCount,
     succeededCount,
     failedCount,
+    unknownCount,
+    cancelledCount,
     skippedCount,
     needsAgentCount,
     unresolvedCount,
@@ -364,10 +380,24 @@ export async function executeReplay(actor, plan, options = {}) {
         }
       }
     } catch (error) {
-      results.push({ index, kind: step.kind, ok: false, error: error.message });
-      if (stopOnFailure) {
+      const code = String(error?.code || "ACTION_FAILED");
+      const errorStatus = error?.status === "unknown" || ["EXECUTION_TIMEOUT", "EXECUTION_UNKNOWN", "ACTOR_EXITED", "ACTOR_CLOSING"].includes(code)
+        ? "unknown"
+        : error?.status === "cancelled" || ["ACTION_PAUSED", "ACTION_STOPPED", "REQUEST_EXPIRED"].includes(code)
+          ? "cancelled"
+          : "failed";
+      results.push({
+        index,
+        kind: step.kind,
+        ok: false,
+        status: errorStatus,
+        code,
+        ...(error?.operationId ? { operationId: error.operationId } : {}),
+        error: error.message,
+      });
+      if (stopOnFailure || errorStatus === "unknown" || errorStatus === "cancelled") {
         return summarizeReplay(plan, startIndex, results, {
-          status: "failed",
+          status: errorStatus,
           executionFinished: false,
           stoppedAt: index,
         });

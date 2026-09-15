@@ -1,6 +1,6 @@
 {
   "name": "atria-cli",
-  "version": "0.2.0-private.1",
+  "version": "0.2.0-private.2",
   "description": "Atria local-first CLI entrypoint for browser, desktop, and recording capabilities.",
   "type": "module",
   "bin": {

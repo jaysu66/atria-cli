@@ -50,6 +50,24 @@ test("event stream server registers the expected MCP tools", () => {
   assert.equal(server._registeredTools.event_stream_start._meta["openai/widgetAccessible"], true);
 });
 
+test("recording defaults to capturePolicy off", async () => {
+  let startInput = null;
+  const server = createEventStreamServer({
+    recorderClient: {
+      start: async (input) => {
+        startInput = input;
+        return { isRecording: true };
+      },
+      status: async () => ({}),
+      stop: async () => ({}),
+    },
+  });
+  await server._registeredTools.event_stream_start.handler({});
+  assert.equal(startInput.capturePolicy, "off");
+  assert.equal(startInput.redactText, true);
+  server.closeRecorder();
+});
+
 test("20-step batch and replay share one sanitized action-event path", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rrw-s4-"));
   const sessionID = "twenty-step-replay";
@@ -130,6 +148,113 @@ test("20-step batch and replay share one sanitized action-event path", async (t)
   assert.equal(replayEvents.filter((event) => event.phase === "input_dispatched").length, 20);
   assert.equal(new Set(batchEvents.filter((event) => event.phase === "input_dispatched").map((event) => event.operationId)).size, 20);
   assert.equal(JSON.stringify(events).includes(secret), false);
+});
+
+test("parent operation ids deduplicate batch, replay, and composite type across 100 concurrent calls", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rrw-parent-idempotency-"));
+  const sessionID = "one-step-replay";
+  const sessionDir = path.join(root, sessionID);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, "events.jsonl"), JSON.stringify({
+    type: "keyboard.key",
+    timestamp: new Date().toISOString(),
+    application: { processName: "fixture.exe", pid: 202 },
+    window: { title: "Fixture Window", hwnd: 101 },
+    input: { vkCode: 0x0d, keyName: "Enter" },
+  }) + "\n", "utf8");
+  fs.writeFileSync(path.join(sessionDir, "suppressed_events.jsonl"), "", "utf8");
+
+  let operationSequence = 0;
+  const counts = { click: 0, type: 0, key: 0, focus: 0 };
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const actor = {
+    actorBootId: "fake-boot",
+    createOperationId: () => `fake-boot:${++operationSequence}`,
+    addEventListener: () => () => {},
+    waitForOperationSafety: async (operationId) => ({ operationId, safe: true }),
+    uiSnapshot: async () => ({
+      window: { hwnd: 101, pid: 202, title: "Fixture Window" },
+      elements: [{ i: 0, type: "Edit", name: "Fixture", automationId: "FixtureInput", cx: 10, cy: 10, enabled: true }],
+    }),
+    screenshot: async () => ({}),
+    click: async () => { counts.click += 1; await pause(); return { clicked: true }; },
+    mouseMove: async () => ({ moved: true }),
+    typeText: async () => { counts.type += 1; await pause(); return { typed: true }; },
+    key: async () => { counts.key += 1; await pause(); return { keys: true }; },
+    scroll: async () => ({ scrolled: true }),
+    windowFocus: async () => {
+      counts.focus += 1;
+      await pause();
+      return { focused: true, foreground: { hwnd: 101, pid: 202, processName: "fixture.exe", windowTitle: "Fixture Window" } };
+    },
+    uiaFind: async () => ({ elements: [] }),
+    uiaInvoke: async () => ({ invoked: true }),
+    operationStatus: () => null,
+    pause: async () => ({ acknowledged: true }),
+    resume: async () => ({}),
+    stop: async () => ({ acknowledged: true }),
+    close: () => {},
+  };
+  const server = createEventStreamServer({
+    actorClient: actor,
+    automationLockPath: path.join(root, "desktop.lock"),
+    recorderClient: {
+      sessionRoot: root,
+      start: async () => ({}),
+      status: async () => ({}),
+      stop: async () => ({}),
+    },
+  });
+  t.after(() => {
+    server.closeRecorder();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const commonFeedback = { returnState: false, returnScreenshotPath: false };
+  const batchInput = {
+    operationId: "parent-batch",
+    actions: [{ action: "type", text: "once" }],
+    expect: { titleExact: "Fixture Window" },
+    ...commonFeedback,
+  };
+  const batches = await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.computer_batch.handler(batchInput)));
+  assert.equal(counts.type, 1);
+  assert.ok(batches.every((result) => result.structuredContent.operationId === "parent-batch"));
+  await server._registeredTools.computer_batch.handler(batchInput);
+  assert.equal(counts.type, 1);
+  await assert.rejects(
+    server._registeredTools.computer_batch.handler({ ...batchInput, actions: [{ action: "type", text: "changed" }] }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+  const batchStatus = await server._registeredTools.automation_status.handler({ operationId: "parent-batch" });
+  assert.equal(batchStatus.structuredContent.operation.state, "succeeded");
+
+  const replayInput = { operationId: "parent-replay", sessionID, stepDelayMs: 0 };
+  const replays = await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.replay_run.handler(replayInput)));
+  assert.equal(counts.focus, 1);
+  assert.equal(counts.key, 1);
+  assert.ok(replays.every((result) => result.structuredContent.operationId === "parent-replay"));
+  await assert.rejects(
+    server._registeredTools.replay_run.handler({ ...replayInput, startIndex: 1 }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+
+  const snapshot = await server._registeredTools.ui_snapshot.handler({});
+  const typeInput = {
+    operationId: "parent-composite-type",
+    text: "only once",
+    elementIndex: 0,
+    snapshotId: snapshot.structuredContent.snapshotId,
+    ...commonFeedback,
+  };
+  const beforeComposite = { click: counts.click, type: counts.type };
+  await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.computer_type.handler(typeInput)));
+  assert.equal(counts.click - beforeComposite.click, 1);
+  assert.equal(counts.type - beforeComposite.type, 1);
+  await assert.rejects(
+    server._registeredTools.computer_type.handler({ ...typeInput, text: "changed" }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
 });
 
 test("event stream stop auto-generates a skill when Codex did not provide a summary", async () => {

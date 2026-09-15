@@ -118,7 +118,7 @@ fn default_max_duration() -> u64 {
 }
 
 fn default_capture_policy() -> String {
-    "key_events".to_string()
+    "off".to_string()
 }
 
 fn default_true() -> bool {
@@ -232,6 +232,8 @@ fn handle_request(request: &RpcRequest) -> Result<Value> {
 }
 
 fn start_recording(params: StartParams) -> Result<Value> {
+    validate_capture_privacy(&params.capture_policy, params.redact_text)?;
+
     let mut guard = active().lock().unwrap();
     if let Some(state) = guard.as_ref() {
         return Ok(state.public_status());
@@ -581,14 +583,28 @@ fn should_capture_event(event_type: &str) -> bool {
     matches!(event_type, "keyboard.key" | "keyboard.text")
 }
 
+fn validate_capture_privacy(capture_policy: &str, redact_text: bool) -> Result<()> {
+    if redact_text && capture_policy == "key_events" {
+        return Err(anyhow!(
+            "CAPTURE_REQUIRES_TEXT_OPT_IN: key-event screenshots require redactText=false"
+        ));
+    }
+    Ok(())
+}
+
+fn should_capture_screenshot(capture: bool, capture_policy: &str, redact_text: bool) -> bool {
+    capture && capture_policy == "key_events" && !redact_text
+}
+
 fn record_event(event_type: &str, point: Option<POINT>, input: Value, capture: bool) {
-    let Some((session_id, exclude_apps, capture_policy, captures_dir)) = ({
+    let Some((session_id, exclude_apps, capture_policy, redact_text, captures_dir)) = ({
         let guard = active().lock().unwrap();
         guard.as_ref().map(|state| {
             (
                 state.session_id.clone(),
                 state.exclude_apps.clone(),
                 state.capture_policy.clone(),
+                state.redact_text,
                 state.captures_dir.clone(),
             )
         })
@@ -626,7 +642,7 @@ fn record_event(event_type: &str, point: Option<POINT>, input: Value, capture: b
     }
 
     let event_id = Uuid::new_v4().to_string();
-    let capture_path = if capture && capture_policy == "key_events" {
+    let capture_path = if should_capture_screenshot(capture, &capture_policy, redact_text) {
         capture_screen(&captures_dir, &event_id).ok()
     } else {
         None
@@ -869,6 +885,27 @@ mod tests {
         assert!(should_capture_event("keyboard.text"));
         assert!(!should_capture_event("mouse.click"));
         assert!(!should_capture_event("recorder.notice"));
+    }
+
+    #[test]
+    fn capture_policy_defaults_to_off() {
+        assert_eq!(default_capture_policy(), "off");
+    }
+
+    #[test]
+    fn redacted_recording_rejects_key_event_screenshots() {
+        let error = validate_capture_privacy("key_events", true).unwrap_err();
+        assert!(format!("{error:#}").contains("CAPTURE_REQUIRES_TEXT_OPT_IN"));
+        assert!(validate_capture_privacy("off", true).is_ok());
+        assert!(validate_capture_privacy("key_events", false).is_ok());
+    }
+
+    #[test]
+    fn screenshot_guard_requires_explicit_text_opt_in() {
+        assert!(!should_capture_screenshot(true, "key_events", true));
+        assert!(should_capture_screenshot(true, "key_events", false));
+        assert!(!should_capture_screenshot(true, "off", false));
+        assert!(!should_capture_screenshot(false, "key_events", false));
     }
 
     #[test]

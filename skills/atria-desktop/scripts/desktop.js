@@ -76,6 +76,33 @@ function callFingerprint(tool, args) {
   return crypto.createHash('sha256').update(JSON.stringify(stableValue({ tool: tool, args: args || {} }))).digest('hex');
 }
 
+function toolOutcome(result) {
+  let payload = result && result.structuredContent;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    for (const item of (result && result.content) || []) {
+      if (!item || item.type !== 'text' || typeof item.text !== 'string') continue;
+      try {
+        const parsed = JSON.parse(item.text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          payload = parsed;
+          break;
+        }
+      } catch (_) {}
+    }
+  }
+  payload = payload && typeof payload === 'object' ? payload : {};
+  const allowed = new Set(['succeeded', 'failed', 'partial', 'unknown', 'cancelled', 'needs_agent']);
+  const status = allowed.has(payload.status) ? payload.status
+    : allowed.has(payload.overallStatus) ? payload.overallStatus
+      : result && result.isError ? 'failed' : 'succeeded';
+  const last = Array.isArray(payload.results) ? payload.results[payload.results.length - 1] : null;
+  return {
+    status: status,
+    code: payload.code || (last && last.code) || null,
+    payload: payload,
+  };
+}
+
 /** Locate the record-replay-windows suite. Override with ATRIA_DESKTOP_SUITE_DIR. */
 function resolveSuiteDir() {
   const bundled = path.resolve(__dirname, '..', '..', '..', 'packages', 'record-replay-windows');
@@ -133,7 +160,12 @@ function runDaemon() {
         const entry = pending.get(msg.id);
         pending.delete(msg.id);
         clearTimeout(entry.timer);
-        entry.resolve(msg);
+        clearTimeout(entry.retentionTimer);
+        if (entry.timedOut) {
+          try { entry.onLate(msg); } catch (_) {}
+        } else {
+          entry.resolve(msg);
+        }
       }
     }
   });
@@ -145,15 +177,31 @@ function runDaemon() {
     process.exit(1);
   });
 
-  function rpc(method, params, timeoutMs) {
+  function rpc(method, params, timeoutMs, options) {
     timeoutMs = timeoutMs || Number(process.env.ATRIA_DESKTOP_REQUEST_TIMEOUT_MS || 180000);
+    options = options || {};
     return new Promise(function (resolve, reject) {
       const id = nextId++;
+      const entry = {
+        resolve: resolve,
+        timer: null,
+        retentionTimer: null,
+        timedOut: false,
+        onLate: typeof options.onLate === 'function' ? options.onLate : function () {},
+      };
       const timer = setTimeout(function () {
-        pending.delete(id);
+        if (options.retainLateResult) {
+          entry.timedOut = true;
+          const retentionMs = Math.max(1000, Number(process.env.ATRIA_DESKTOP_LATE_RESULT_TTL_MS || 600000));
+          entry.retentionTimer = setTimeout(function () { pending.delete(id); }, retentionMs);
+          entry.retentionTimer.unref?.();
+        } else {
+          pending.delete(id);
+        }
         reject(new Error(method + ' timed out after ' + timeoutMs + 'ms'));
       }, timeoutMs);
-      pending.set(id, { resolve: resolve, timer: timer });
+      entry.timer = timer;
+      pending.set(id, entry);
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params }) + '\n');
     });
   }
@@ -182,6 +230,7 @@ function runDaemon() {
       tool: operation.tool,
       state: operation.state,
       createdAt: operation.createdAt,
+      timedOutAt: operation.timedOutAt || null,
       settledAt: operation.settledAt || null,
       result: operation.result || null,
       error: operation.error || null,
@@ -221,33 +270,51 @@ function runDaemon() {
       fingerprint: fingerprint,
       state: 'dispatched',
       createdAt: new Date().toISOString(),
+      timedOutAt: null,
       settledAt: null,
       result: null,
       error: null,
       promise: null,
     };
     operations.set(operationId, operation);
-    operation.promise = rpc('tools/call', { name: parsed.tool, arguments: parsed.args || {} })
-      .then(function (out) {
-        operation.settledAt = new Date().toISOString();
-        if (out.error) {
-          operation.state = 'failed';
-          operation.error = out.error.message || String(out.error);
-          operation.result = { ok: false, operationId: operationId, status: 'failed', error: operation.error, raw: out };
-        } else {
-          const isError = Boolean(out.result && out.result.isError);
-          operation.state = isError ? 'failed' : 'succeeded';
-          operation.result = { ok: !isError, operationId: operationId, status: operation.state, result: out.result };
-        }
-        operation.promise = null;
-        return operation.result;
-      })
+    function settleOperation(out) {
+      operation.settledAt = new Date().toISOString();
+      if (out.error) {
+        operation.state = 'failed';
+        operation.error = out.error.message || String(out.error);
+        operation.result = { ok: false, operationId: operationId, status: 'failed', error: operation.error, raw: out };
+      } else {
+        const outcome = toolOutcome(out.result);
+        operation.state = outcome.status;
+        operation.error = out.result && out.result.isError
+          ? (outcome.payload.error || outcome.payload.message || outcome.code || outcome.status)
+          : null;
+        operation.result = {
+          ok: outcome.status === 'succeeded',
+          operationId: operationId,
+          status: outcome.status,
+          ...(outcome.code ? { code: outcome.code } : {}),
+          result: out.result,
+        };
+      }
+      operation.promise = null;
+      return operation.result;
+    }
+    operation.promise = rpc(
+      'tools/call',
+      { name: parsed.tool, arguments: parsed.args || {} },
+      undefined,
+      { retainLateResult: true, onLate: settleOperation }
+    )
+      .then(settleOperation)
       .catch(function (error) {
+        if (operation.state === 'succeeded' || operation.state === 'failed') return operation.result;
         operation.state = 'unknown';
         operation.error = error.message;
-        operation.settledAt = new Date().toISOString();
+        operation.timedOutAt = new Date().toISOString();
         operation.promise = null;
-        return { ok: false, operationId: operationId, status: 'unknown', code: 'EXECUTION_UNKNOWN', error: error.message };
+        operation.result = { ok: false, operationId: operationId, status: 'unknown', code: 'EXECUTION_UNKNOWN', error: error.message };
+        return operation.result;
       });
     return operation.promise;
   }

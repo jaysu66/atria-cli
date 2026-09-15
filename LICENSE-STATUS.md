@@ -1,6 +1,6 @@
 # License and publication status
 
-This directory is a `0.2.0-private.2` review candidate, not a public or final legal release.
+This directory is a `0.2.0-private.3` review candidate, not a public or final legal release.
 
 Before creating a public repository or publishing a package:
 

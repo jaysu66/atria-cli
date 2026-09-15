@@ -733,9 +733,26 @@ export function createEventStreamServer(options = {}) {
   function parentOperationStatus(operationId) {
     const operation = parentOperations.get(operationId);
     if (!operation) return null;
+    const currentActorBootId = actor.actorBootId || actionCoordinator.bootId;
+    if (operation.actorBootId !== currentActorBootId) {
+      return {
+        operationId,
+        tool: operation.tool,
+        state: "unknown",
+        createdAt: new Date(operation.createdAt).toISOString(),
+        settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
+        result: null,
+        error: {
+          code: "BOOT_MISMATCH",
+          message: "The parent operation belongs to an expired actor boot and cannot be retried.",
+          status: "unknown",
+        },
+      };
+    }
     return {
       operationId,
       tool: operation.tool,
+      sessionId: operation.sessionId,
       state: operation.state,
       createdAt: new Date(operation.createdAt).toISOString(),
       settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
@@ -748,11 +765,37 @@ export function createEventStreamServer(options = {}) {
     };
   }
 
-  function runParentOperation(tool, input, work) {
+  function runParentOperation(tool, input, sessionId, work) {
+    if (typeof actor.ensureStarted === "function") actor.ensureStarted();
+    const actorBootId = String(actor.actorBootId || actionCoordinator.bootId);
+    const boundSessionId = String(sessionId || actionCoordinator.defaultSessionId);
     const operationId = input.operationId || actionCoordinator.newOperationId();
+    if (input.operationId && !operationId.startsWith(`${actorBootId}:`)) {
+      throw operationError(
+        "BOOT_MISMATCH",
+        "The parent operationId belongs to an expired service or actor boot; it will not be re-executed.",
+        operationId,
+        "unknown",
+      );
+    }
     const fingerprint = requestFingerprint(tool, input);
     const existing = parentOperations.get(operationId);
     if (existing) {
+      if (existing.actorBootId !== actorBootId) {
+        throw operationError(
+          "BOOT_MISMATCH",
+          "The parent operationId belongs to an expired actor boot; it will not be re-executed.",
+          operationId,
+          "unknown",
+        );
+      }
+      if (existing.sessionId !== boundSessionId) {
+        throw operationError(
+          "SESSION_MISMATCH",
+          "The parent operationId is already bound to a different automation session.",
+          operationId,
+        );
+      }
       if (existing.fingerprint !== fingerprint) {
         throw operationError(
           "IDEMPOTENCY_CONFLICT",
@@ -771,6 +814,8 @@ export function createEventStreamServer(options = {}) {
     }
     const operation = {
       tool,
+      actorBootId,
+      sessionId: boundSessionId,
       fingerprint,
       state: "running",
       createdAt: Date.now(),
@@ -1181,7 +1226,7 @@ export function createEventStreamServer(options = {}) {
     async (input = {}) => {
       if (Number.isInteger(input.elementIndex)) {
         const sessionId = input.sessionId;
-        const parent = runParentOperation("computer_type_composite", input, async (parentOperationId) => {
+        const parent = runParentOperation("computer_type_composite", input, sessionId, async (parentOperationId) => {
           const target = resolveTarget(input);
           const result = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async (heldContext) => {
             await runWrite("click", { x: target.x, y: target.y, expect: boundExpect(input, target) }, {
@@ -1300,7 +1345,7 @@ export function createEventStreamServer(options = {}) {
     },
     async (input = {}) => {
       const sessionId = input.sessionId;
-      const parent = runParentOperation("computer_batch", input, async (parentOperationId) => {
+      const parent = runParentOperation("computer_batch", input, sessionId, async (parentOperationId) => {
         const results = [];
         const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async (heldContext) => {
           for (const [idx, step] of (input.actions || []).entries()) {
@@ -1550,7 +1595,7 @@ export function createEventStreamServer(options = {}) {
         });
       }
       const sessionId = input.sessionId || session.sessionID;
-      const parent = runParentOperation("replay_run", input, async (parentOperationId) => {
+      const parent = runParentOperation("replay_run", input, sessionId, async (parentOperationId) => {
         const replayActor = {
           uiaFind: (params) => actor.uiaFind(params),
           screenshot: (params) => actor.screenshot(params),

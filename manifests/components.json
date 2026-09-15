@@ -44,8 +44,8 @@
         "windows-ui-access"
       ],
       "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows",
-      "sourceCommit": "a7a888ca52e2da1afa82184900c7e195589d3820",
-      "sourceTreeHash": "00dacc853114a17d65b9b26e46f880c1e6ea16a92c78cf90cbd3a936deee1724",
+      "sourceCommit": "38b9fe711bdf5833ae83a8d55ec302c01eb844f2",
+      "sourceTreeHash": "5aa58e84683624c3a1a3ed08d92866634de289f4530978196f967c12af549b3b",
       "protocolVersion": 2
     },
     {
@@ -104,6 +104,6 @@
       "sourceOfTruth": "Atria/02-CLI与通用能力/atria-cli/skills/atria-cli-overview"
     }
   ],
-  "version": "0.2.0-private.2",
-  "generatedAt": "2026-09-15T10:22:32.140Z"
+  "version": "0.2.0-private.3",
+  "generatedAt": "2026-09-15T10:54:47.737Z"
 }

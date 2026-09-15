@@ -264,6 +264,66 @@ test("executeReplay stops on failure by default and enforces focus", async () =>
   assert.equal(actor.calls.some(([name]) => name === "click"), false);
 });
 
+test("focus unknown or cancelled preserves structure and never tries another selector", async (t) => {
+  for (const [code, status] of [
+    ["ACTOR_EXITED", "unknown"],
+    ["REQUEST_EXPIRED", "cancelled"],
+  ]) {
+    await t.test(code, async () => {
+      let focusCalls = 0;
+      let clickCalls = 0;
+      const operationId = `actor-boot:focus-${status}`;
+      const actor = mockActor({
+        windowFocus: async () => {
+          focusCalls += 1;
+          const error = new Error(`${code}: focus outcome unresolved`);
+          error.code = code;
+          error.status = status;
+          error.operationId = operationId;
+          throw error;
+        },
+        click: async () => { clickCalls += 1; },
+      });
+      const plan = [
+        ...planReplay([clickEvent({ ts: "2026-07-04T10:00:01.000Z", x: 1, y: 1 })]),
+        { kind: "key", keys: "tab", processName: "Notepad.exe", windowTitle: "Untitled - Notepad" },
+      ];
+      const outcome = await executeReplay(actor, plan, { stepDelayMs: 0, stopOnFailure: false });
+      assert.equal(focusCalls, 1);
+      assert.equal(clickCalls, 0);
+      assert.equal(outcome.status, status);
+      assert.equal(outcome.stoppedAt, 0);
+      assert.equal(outcome.results[0].method, "focus_execution_unresolved");
+      assert.equal(outcome.results[0].status, status);
+      assert.equal(outcome.results[0].code, code);
+      assert.equal(outcome.results[0].operationId, operationId);
+    });
+  }
+});
+
+test("a deterministic focus selector miss may fall back to the next selector", async () => {
+  const focusCalls = [];
+  const actor = mockActor({
+    windowFocus: async (params) => {
+      focusCalls.push(params);
+      if (params.title) {
+        const error = new Error("FOCUS_NOT_FOUND: title did not match");
+        error.code = "FOCUS_NOT_FOUND";
+        error.status = "failed";
+        throw error;
+      }
+      return { focused: true, foreground: { hwnd: 101, pid: 202, processName: "Notepad.exe", windowTitle: "Untitled - Notepad" } };
+    },
+  });
+  const plan = planReplay([clickEvent({ ts: "2026-07-04T10:00:01.000Z", x: 1, y: 1 })]);
+  const outcome = await executeReplay(actor, plan, { stepDelayMs: 0 });
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(focusCalls.length, 2);
+  assert.equal(Boolean(focusCalls[0].title), true);
+  assert.equal(focusCalls[1].processName, "Notepad.exe");
+  assert.equal(actor.calls.some(([name]) => name === "click"), true);
+});
+
 test("unmapped VK_PACKET becomes needs_agent instead of a successful skip", async () => {
   const events = Array.from({ length: 15 }, (_, index) => keyEvent({
     ts: `2026-07-04T10:00:${String(index + 1).padStart(2, "0")}.000Z`,

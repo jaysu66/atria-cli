@@ -16,7 +16,7 @@ Chrome 扩展 / Windows UI Automation / native recorder
 结构化结果、截图、事件文件或生成的 Skill
 ```
 
-当前是 `0.2.0-private.2` 私有候选源代码包，尚未公开；不包含云端模型、登录状态、Cookie、公司数据或用户生成的 Skill。原生二进制候选与源码候选分开保管。
+当前是 `0.2.0-private.3` 私有候选源代码包，尚未公开；不包含云端模型、登录状态、Cookie、公司数据或用户生成的 Skill。原生二进制候选与源码候选分开保管。
 
 ## 能力地图
 

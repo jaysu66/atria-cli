@@ -172,6 +172,21 @@ export function readJsonlFile(filePath) {
     .filter(Boolean);
 }
 
+function classifyExecutionError(error) {
+  const code = String(error?.code || "ACTION_FAILED");
+  const status = error?.status === "unknown" || ["EXECUTION_TIMEOUT", "EXECUTION_UNKNOWN", "ACTOR_EXITED", "ACTOR_CLOSING"].includes(code)
+    ? "unknown"
+    : error?.status === "cancelled" || ["ACTION_PAUSED", "ACTION_STOPPED", "REQUEST_EXPIRED"].includes(code)
+      ? "cancelled"
+      : "failed";
+  return {
+    status,
+    code,
+    ...(error?.operationId ? { operationId: error.operationId } : {}),
+    error: error?.message || String(error),
+  };
+}
+
 async function ensureFocus(actor, step, state, stepIndex) {
   const wantProcess = step.processName || "";
   if (!wantProcess && !step.windowTitle && !step.windowHwnd) return { ok: true, method: "none", expect: undefined };
@@ -180,33 +195,40 @@ async function ensureFocus(actor, step, state, stepIndex) {
   // the exact hwnd/pid returned here and re-checks foreground immediately before input.
   if (state.targetKey === targetKey && state.expect) return { ok: true, method: "cached", expect: state.expect };
   let result = null;
-  if (step.windowHwnd) {
+  let lastFailure = null;
+  const tryFocus = async (params) => {
     try {
-      result = await actor.windowFocus({
-        hwnd: step.windowHwnd,
-        processName: wantProcess || undefined,
-        title: step.windowTitle || undefined,
-        _actionStepIndex: stepIndex,
-      });
-    } catch (_error) {
-      result = null;
+      return { result: await actor.windowFocus(params), terminal: null };
+    } catch (error) {
+      const failure = classifyExecutionError(error);
+      if (failure.status === "unknown" || failure.status === "cancelled") {
+        return { result: null, terminal: { ok: false, method: "focus_execution_unresolved", ...failure } };
+      }
+      lastFailure = failure;
+      return { result: null, terminal: null };
     }
+  };
+  if (step.windowHwnd) {
+    const attempt = await tryFocus({
+      hwnd: step.windowHwnd,
+      processName: wantProcess || undefined,
+      title: step.windowTitle || undefined,
+      _actionStepIndex: stepIndex,
+    });
+    if (attempt.terminal) return attempt.terminal;
+    result = attempt.result;
   }
   if (step.windowTitle) {
     if (!result?.focused) {
-      try {
-        result = await actor.windowFocus({ title: step.windowTitle, processName: wantProcess || undefined, _actionStepIndex: stepIndex });
-      } catch (_error) {
-        result = null;
-      }
+      const attempt = await tryFocus({ title: step.windowTitle, processName: wantProcess || undefined, _actionStepIndex: stepIndex });
+      if (attempt.terminal) return attempt.terminal;
+      result = attempt.result;
     }
   }
   if (!result?.focused && wantProcess) {
-    try {
-      result = await actor.windowFocus({ processName: wantProcess, _actionStepIndex: stepIndex });
-    } catch (error) {
-      return { ok: false, method: "focus_failed", error: error.message };
-    }
+    const attempt = await tryFocus({ processName: wantProcess, _actionStepIndex: stepIndex });
+    if (attempt.terminal) return attempt.terminal;
+    result = attempt.result;
   }
   const foreground = result?.foreground || {};
   const fgProcess = String(foreground.processName || "");
@@ -214,7 +236,7 @@ async function ensureFocus(actor, step, state, stepIndex) {
     return { ok: false, method: "focus_mismatch", foreground: result?.foreground };
   }
   if (!result?.focused || !foreground.hwnd || !foreground.pid) {
-    return { ok: false, method: "focus_unverified", foreground };
+    return { ok: false, method: lastFailure ? "focus_failed" : "focus_unverified", foreground, ...(lastFailure || {}) };
   }
   const expect = {
     hwnd: foreground.hwnd,
@@ -340,10 +362,21 @@ export async function executeReplay(actor, plan, options = {}) {
     try {
       const focus = await ensureFocus(actor, step, state, index);
       if (!focus.ok) {
-        results.push({ index, kind: step.kind, ok: false, method: focus.method, error: focus.error, foreground: focus.foreground });
-        if (stopOnFailure) {
+        const focusStatus = focus.status || "failed";
+        results.push({
+          index,
+          kind: step.kind,
+          ok: false,
+          method: focus.method,
+          status: focusStatus,
+          ...(focus.code ? { code: focus.code } : {}),
+          ...(focus.operationId ? { operationId: focus.operationId } : {}),
+          error: focus.error,
+          foreground: focus.foreground,
+        });
+        if (stopOnFailure || focusStatus === "unknown" || focusStatus === "cancelled") {
           return summarizeReplay(plan, startIndex, results, {
-            status: "failed",
+            status: focusStatus,
             executionFinished: false,
             stoppedAt: index,
           });
@@ -380,24 +413,16 @@ export async function executeReplay(actor, plan, options = {}) {
         }
       }
     } catch (error) {
-      const code = String(error?.code || "ACTION_FAILED");
-      const errorStatus = error?.status === "unknown" || ["EXECUTION_TIMEOUT", "EXECUTION_UNKNOWN", "ACTOR_EXITED", "ACTOR_CLOSING"].includes(code)
-        ? "unknown"
-        : error?.status === "cancelled" || ["ACTION_PAUSED", "ACTION_STOPPED", "REQUEST_EXPIRED"].includes(code)
-          ? "cancelled"
-          : "failed";
+      const failure = classifyExecutionError(error);
       results.push({
         index,
         kind: step.kind,
         ok: false,
-        status: errorStatus,
-        code,
-        ...(error?.operationId ? { operationId: error.operationId } : {}),
-        error: error.message,
+        ...failure,
       });
-      if (stopOnFailure || errorStatus === "unknown" || errorStatus === "cancelled") {
+      if (stopOnFailure || failure.status === "unknown" || failure.status === "cancelled") {
         return summarizeReplay(plan, startIndex, results, {
-          status: errorStatus,
+          status: failure.status,
           executionFinished: false,
           stoppedAt: index,
         });

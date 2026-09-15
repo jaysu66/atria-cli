@@ -1,6 +1,6 @@
 # Atria CLI 快速开始
 
-这是 `0.2.0-private.2` 的最短验证路径。完整的用户体验和安全说明见 [USER-GUIDE.md](USER-GUIDE.md)。
+这是 `0.2.0-private.3` 的最短验证路径。完整的用户体验和安全说明见 [USER-GUIDE.md](USER-GUIDE.md)。
 
 ## 1. 解压并检查包
 

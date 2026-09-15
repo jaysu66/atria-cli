@@ -98,6 +98,16 @@ for (const name of ['actor.exe', 'recorder.exe', 'overlay.exe']) {
 }
 
 const desktopComponent = components.components.find((component) => component.id === 'record-replay-windows');
+const originalBuildManifestPath = join(nativeRelease, 'native-build-manifest.json');
+if (!existsSync(originalBuildManifestPath)) throw new Error('missing native-build-manifest.json beside the fresh binaries');
+const originalBuildManifest = JSON.parse(readFileSync(originalBuildManifestPath, 'utf8'));
+const originalByName = new Map((originalBuildManifest.artifacts || []).map((artifact) => [artifact.name, artifact]));
+for (const artifact of nativeArtifacts) {
+  const original = originalByName.get(artifact.name);
+  if (!original || String(original.sha256).toLowerCase() !== artifact.sha256.toLowerCase() || original.size !== artifact.size) {
+    throw new Error(`native artifact does not match fresh build manifest: ${artifact.name}`);
+  }
+}
 const nativeManifest = {
   schemaVersion: 1,
   status: 'PRIVATE REVIEW ONLY - NOT FOR REDISTRIBUTION',
@@ -112,6 +122,25 @@ writeFileSync(join(nativeDir, 'native-manifest.json'), JSON.stringify(nativeMani
 writeFileSync(join(nativeDir, 'README.md'), `# Atria Windows native private candidate\n\nPRIVATE REVIEW ONLY. NOT FOR REDISTRIBUTION.\n\nThis directory contains actor.exe, recorder.exe and the optional standalone overlay.exe built from source commit \`${nativeManifest.sourceCommit}\`. Verify every SHA-256 in \`native-manifest.json\` before copying these files into \`packages/record-replay-windows/bin\`.\n\nUpdate all three binaries together with the matching source/Skill candidate. For rollback, stop active operations, restore the previous three verified binaries and matching source, then confirm the CLI version and protocol. Do not remove user recordings, pairing tokens or configuration. Redistribution licensing, dependency notices and clean-machine provenance remain unapproved.\n`, 'utf8');
 writeFileSync(join(nativeDir, 'LICENSE-STATUS.md'), 'Native redistribution licensing and third-party notices are not yet approved. Keep this candidate private and do not publish or redistribute it.\n', 'utf8');
 
+const allowedNativeFiles = new Set(['actor.exe', 'recorder.exe', 'overlay.exe', 'native-manifest.json', 'README.md', 'LICENSE-STATUS.md', 'native-scan.json']);
+const nativeScanFindings = [];
+for (const file of listFiles(nativeDir)) {
+  if (!allowedNativeFiles.has(file)) nativeScanFindings.push({ path: file, rule: 'unexpected-file' });
+  if (file.endsWith('.exe')) {
+    const bytes = readFileSync(join(nativeDir, file));
+    if (bytes.length < 2 || bytes[0] !== 0x4d || bytes[1] !== 0x5a) nativeScanFindings.push({ path: file, rule: 'invalid-pe-header' });
+  }
+}
+const nativeScan = {
+  ok: nativeScanFindings.length === 0,
+  policy: 'Exact allowlist; three PE binaries must match the fresh isolated build manifest. No source history, configuration, recordings, knowledge assets, or credentials are included.',
+  allowedFiles: [...allowedNativeFiles].sort(),
+  buildManifestMatched: true,
+  findings: nativeScanFindings,
+};
+writeFileSync(join(nativeDir, 'native-scan.json'), JSON.stringify(nativeScan, null, 2) + '\n', 'utf8');
+if (!nativeScan.ok) throw new Error('native candidate scan failed');
+
 const sourceTree = treeManifest(sourceDir);
 const nativeTree = treeManifest(nativeDir);
 const artifacts = {
@@ -123,7 +152,7 @@ const artifacts = {
   sourceCandidate: { directory: relative(candidateRoot, sourceDir).replaceAll('\\', '/'), ...sourceTree },
   nativeCandidate: { directory: relative(candidateRoot, nativeDir).replaceAll('\\', '/'), ...nativeTree },
   sourceCommits: Object.fromEntries(components.components.map((component) => [component.id, component.sourceCommit ?? null])),
-  verification: JSON.parse(verify.stdout),
+  verification: { source: JSON.parse(verify.stdout), native: nativeScan },
 };
 writeFileSync(join(candidateRoot, 'artifacts.json'), JSON.stringify(artifacts, null, 2) + '\n', 'utf8');
 console.log(JSON.stringify({ ok: true, sourceDir, nativeDir, artifacts: join(candidateRoot, 'artifacts.json'), sourceTreeHash: sourceTree.treeSha256, nativeTreeHash: nativeTree.treeSha256 }, null, 2));

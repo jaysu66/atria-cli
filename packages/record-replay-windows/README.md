@@ -43,6 +43,17 @@ registered by the current overlay. The overlay also exposes tray commands for
 Pause/Resume and Stop. A per-user broker owns the single renderer shared by MCP
 clients and routes controls to the current operation owner.
 
+Pause also holds actions waiting for the renderer or actor to start. Resume
+continues a paused request; Stop cancels waiting requests permanently, so a
+later Resume only enables newly submitted work. Actor restart preserves the
+current pause/stop intent.
+
+Element-index calls require the `snapshotId` returned by `ui_snapshot`.
+For `computer_drag`, both endpoints share that ID; `computer_batch` takes one
+top-level ID for all element-index steps. Invalid/stale scroll targets fail
+without input. Only an omitted scroll target means the current cursor
+position (a batch's shared snapshot alone does not give its scroll step a target).
+
 Example: open an empty test editor and ask the Agent to dry-run a plan that
 types “Atria test” without saving. Confirm the selected hwnd/title, enable
 visual feedback, execute, then read the field back. Do not begin with a private

@@ -61,6 +61,7 @@ export class NativeActorClient {
     this.operations = new Map();
     this.eventListeners = new Set();
     this.closing = false;
+    this.controlState = "running";
     this.controlPath = options.controlPath || path.join(os.tmpdir(), `atria-actor-control-${process.pid}-${crypto.randomUUID()}.txt`);
   }
 
@@ -86,7 +87,7 @@ export class NativeActorClient {
     this.actorBootId = spawnedBootId;
     this.closing = false;
     this.stderr = "";
-    this.setControl("running");
+    this.setControl(this.controlState);
     const spawnedProc = this.spawnActor
       ? this.spawnActor()
       : spawn(this.nativePath, ["--stdio"], {
@@ -302,6 +303,7 @@ export class NativeActorClient {
   }
 
   setControl(state) {
+    this.controlState = state;
     if (state === "running") {
       try { fs.rmSync(`${this.controlPath}.ack`, { force: true }); } catch (_error) {}
     }

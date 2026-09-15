@@ -2,7 +2,7 @@
 
 一个本地优先的统一入口，把 Atria 的浏览器、Windows 桌面和工作流录制能力接给 Agent。
 
-当前版本是 **`0.2.0-private.3` 私有候选包**：尚未公开，也不是一键安装器。它只包含首批三类能力：
+当前版本是 **`0.2.0-private.4` 私有候选包**：尚未公开，也不是一键安装器。它只包含首批三类能力：
 
 - 浏览器控制：通过本地 Browser Bridge 和 Chrome 扩展操作用户主动暴露的 Chrome。
 - Windows 桌面控制：通过 UI Automation 读取和操作原生 Windows 窗口。

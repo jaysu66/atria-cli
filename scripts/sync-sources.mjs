@@ -157,7 +157,7 @@ const componentsPath = join(root, 'manifests', 'components.json');
 const components = JSON.parse(readFileSync(componentsPath, 'utf8'));
 components.schemaVersion = 2;
 components.name = 'atria-cli-private-candidate';
-components.version = '0.2.0-private.3';
+components.version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 components.generatedAt = new Date().toISOString();
 for (const component of components.components) {
   if (sourceMeta[component.id]) Object.assign(component, sourceMeta[component.id]);

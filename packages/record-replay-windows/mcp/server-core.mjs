@@ -939,21 +939,27 @@ export function createEventStreamServer(options = {}) {
   // elementIndex → 物理坐标(引擎解析,模型只挑编号)。
   function resolveTarget(input = {}) {
     if (Number.isInteger(input.elementIndex)) {
-      if (!lastState) throw new Error("No ui_snapshot yet — call ui_snapshot first, then use elementIndex from it.");
+      if (!lastState) throw operationError("SNAPSHOT_REQUIRED", "No ui_snapshot yet — call ui_snapshot first, then use elementIndex from it.");
       if (!Number.isInteger(input.snapshotId)) {
-        throw new Error(`snapshotId is required with elementIndex (current ${lastState.snapshotId}) so stale indexes cannot click a changed UI.`);
+        throw operationError("SNAPSHOT_REQUIRED", `snapshotId is required with elementIndex (current ${lastState.snapshotId}) so stale indexes cannot click a changed UI.`);
       }
       if (input.snapshotId !== lastState.snapshotId) {
-        throw new Error(`Stale snapshotId ${input.snapshotId} (current ${lastState.snapshotId}) — element indexes go stale after UI changes; take a fresh ui_snapshot.`);
+        throw operationError("STALE_SNAPSHOT", `Stale snapshotId ${input.snapshotId} (current ${lastState.snapshotId}) — element indexes go stale after UI changes; take a fresh ui_snapshot.`);
       }
       const el = lastState.elements.find((e) => e.i === input.elementIndex);
-      if (!el) throw new Error(`elementIndex ${input.elementIndex} not in current snapshot (0..${lastState.elements.length - 1}) — take a fresh ui_snapshot.`);
+      if (!el) throw operationError("INVALID_ELEMENT_INDEX", `elementIndex ${input.elementIndex} not in current snapshot (0..${lastState.elements.length - 1}) — take a fresh ui_snapshot.`);
       return { x: el.cx, y: el.cy, element: el, window: lastState.window };
     }
     if (Number.isFinite(input.x) && Number.isFinite(input.y)) {
       return { x: Math.round(input.x), y: Math.round(input.y), element: null, window: lastState?.window || null };
     }
-    throw new Error("Pass elementIndex (from ui_snapshot) or x/y coordinates.");
+    throw operationError("INVALID_TARGET", "Pass elementIndex (from ui_snapshot) or x/y coordinates.");
+  }
+
+  function resolveScrollTarget(input = {}) {
+    if (!["elementIndex", "snapshotId", "x", "y"].some((key) => input[key] !== undefined)) return {};
+    const target = resolveTarget(input);
+    return { x: target.x, y: target.y, window: target.window };
   }
 
   function boundExpect(input = {}, target = null) {
@@ -1142,7 +1148,7 @@ export function createEventStreamServer(options = {}) {
 
   const targetShape = {
     elementIndex: z.number().int().optional().describe("Element index from the latest ui_snapshot (preferred — engine resolves coordinates)"),
-    snapshotId: z.number().int().optional().describe("Optional staleness guard: snapshotId the index came from"),
+    snapshotId: z.number().int().optional().describe("Required with elementIndex: snapshotId the index came from"),
     x: z.number().int().optional(),
     y: z.number().int().optional(),
   };
@@ -1194,6 +1200,7 @@ export function createEventStreamServer(options = {}) {
       description: "Drag from one point/element to another (smooth, real drag events). Response includes fresh UI state.",
       inputSchema: {
         fromElementIndex: z.number().int().optional(),
+        snapshotId: z.number().int().optional().describe("Required when either endpoint uses an element index; both endpoints use this snapshot"),
         fromX: z.number().int().optional(),
         fromY: z.number().int().optional(),
         toElementIndex: z.number().int().optional(),
@@ -1228,8 +1235,12 @@ export function createEventStreamServer(options = {}) {
       },
     },
     async (input = {}) => {
-      let at = {};
-      try { const t = resolveTarget(input); at = { x: t.x, y: t.y, window: t.window }; } catch (_) { /* 无目标=当前位置 */ }
+      let at;
+      try {
+        at = resolveScrollTarget(input);
+      } catch (error) {
+        return asToolResult({ status: "failed", code: error.code || "INVALID_TARGET", message: error.message }, { isError: true });
+      }
       const result = await runWrite("scroll", { ...at, direction: input.direction, amount: input.amount, expect: boundExpect(input, at.window ? at : null) }, actionContext(input));
       return asToolResult({ ...result, ...(await afterAction(input)) });
     },
@@ -1365,6 +1376,7 @@ export function createEventStreamServer(options = {}) {
           amount: z.number().int().optional(),
           ms: z.number().int().min(50).max(10000).optional(),
         })).min(1).max(50),
+        snapshotId: z.number().int().optional().describe("Required for element-index steps; one snapshot taken before the batch binds all such steps"),
         expect: expectShape,
         ...feedbackShape,
         ...operationShape,
@@ -1377,7 +1389,7 @@ export function createEventStreamServer(options = {}) {
         const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async (heldContext) => {
           for (const [idx, step] of (input.actions || []).entries()) {
             try {
-              await actionCoordinator.waitUntilRunnable();
+              await actionCoordinator.waitUntilRunnable(heldContext.leaseState.stopGeneration);
               const context = { lockHeld: true, leaseState: heldContext.leaseState, parentOperationId, stepIndex: idx, sessionId };
               if (step.action === "wait") {
                 await new Promise((r) => setTimeout(r, step.ms || 500));
@@ -1397,8 +1409,7 @@ export function createEventStreamServer(options = {}) {
                 const actionResult = await runWrite("key", { keys: step.keys || "", expect: boundExpect(input) }, context);
                 results.push({ idx, action: "key", ok: true, operationId: actionResult.operationId });
               } else if (step.action === "scroll") {
-                let at = {};
-                try { const t = resolveTarget({ ...step, snapshotId: input.snapshotId }); at = { x: t.x, y: t.y, window: t.window }; } catch (_) {}
+                const at = resolveScrollTarget({ ...step, ...(step.elementIndex !== undefined ? { snapshotId: input.snapshotId } : {}) });
                 const actionResult = await runWrite("scroll", { x: at.x, y: at.y, direction: step.direction, amount: step.amount, expect: boundExpect(input, at.window ? at : null) }, context);
                 results.push({ idx, action: "scroll", ok: true, operationId: actionResult.operationId });
               }

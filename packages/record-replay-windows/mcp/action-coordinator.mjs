@@ -104,6 +104,7 @@ export class AutomationControlError extends Error {
     this.name = "AutomationControlError";
     this.code = state === "stopped" ? "ACTION_STOPPED" : "ACTION_PAUSED";
     this.state = state;
+    this.status = "cancelled";
   }
 }
 
@@ -124,6 +125,7 @@ export class ActionCoordinator {
     this.listeners = new Set();
     this.sequence = 0;
     this.controlState = "running";
+    this.stopGeneration = 0;
     this.lockToken = null;
     this.visual = options.visual || null;
     this.removeActorListener = typeof actor?.addEventListener === "function"
@@ -272,7 +274,7 @@ export class ActionCoordinator {
   async withWriteSession(context, work) {
     if (this.controlState === "stopped") throw new AutomationControlError("stopped");
     const acquired = this.acquire(context);
-    const leaseState = context.leaseState || { unsafeOperationIds: new Set() };
+    const leaseState = context.leaseState || { unsafeOperationIds: new Set(), stopGeneration: this.stopGeneration };
     try {
       return await work({ ...context, lockHeld: true, leaseState });
     } finally {
@@ -286,23 +288,38 @@ export class ActionCoordinator {
     }
   }
 
-  async waitUntilRunnable() {
-    while (this.controlState === "paused") {
+  assertNotStopped(stopGeneration) {
+    if (this.controlState === "stopped" || stopGeneration !== this.stopGeneration) {
+      throw new AutomationControlError("stopped");
+    }
+  }
+
+  async waitUntilRunnable(stopGeneration = this.stopGeneration) {
+    while (true) {
+      this.assertNotStopped(stopGeneration);
+      if (this.controlState !== "paused") return;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    if (this.controlState === "stopped") throw new AutomationControlError("stopped");
   }
 
   async run(action, params, invoke, context = {}) {
+    const stopGeneration = context.leaseState?.stopGeneration ?? this.stopGeneration;
     const execute = async (heldContext) => {
-      await this.waitUntilRunnable();
-      await this.visual?.beforeAction();
+      // Renderer startup/reconnection can await long enough for pause or stop.
+      // A stop permanently cancels this work, even if resume precedes readiness.
+      do {
+        await this.waitUntilRunnable(stopGeneration);
+        await this.visual?.beforeAction();
+        this.assertNotStopped(stopGeneration);
+      } while (this.controlState === "paused");
       if (typeof this.actor?.ensureStarted === "function") this.actor.ensureStarted();
       const operationId = this.operationIdForContext(context, action);
       const actionContext = { ...heldContext, ...context, operationId };
       this.emit(action, "prepare", actionContext, params, { status: "pending" });
       const beforeCount = this.events.length;
       try {
+        this.assertNotStopped(stopGeneration);
+        if (this.controlState === "paused") throw new AutomationControlError("paused");
         const result = await invoke(actionContext);
         const operationEvents = this.events.slice(beforeCount).filter((event) => event.operationId === operationId);
         if (!operationEvents.some((event) => event.phase === "running")) {
@@ -348,6 +365,7 @@ export class ActionCoordinator {
 
   async stop() {
     this.controlState = "stopped";
+    this.stopGeneration += 1;
     const native = typeof this.actor?.stop === "function" ? await this.actor.stop() : null;
     return { state: "stopped", ...native };
   }

@@ -17,7 +17,7 @@ function run(args, extraEnv = {}) {
 }
 
 test('version comes from package metadata', () => {
-  assert.equal(run(['--version']).stdout.trim(), '0.2.0-private.3');
+  assert.equal(run(['--version']).stdout.trim(), '0.2.0-private.4');
 });
 
 test('skills list reports all five bundled skills', () => {
@@ -65,5 +65,5 @@ test('component doctor is independent and reports a concrete missing-runtime ste
 
 test('CLI starts correctly from a different working directory', () => {
   const output = execFileSync(process.execPath, [cli, '--version'], { cwd: dirname(root), encoding: 'utf8' });
-  assert.equal(output.trim(), '0.2.0-private.3');
+  assert.equal(output.trim(), '0.2.0-private.4');
 });

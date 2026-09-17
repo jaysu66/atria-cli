@@ -113,7 +113,7 @@ Action results include an operation status. `succeeded` means the executor confi
 
 **Keep recording screenshots off by default.** `event_stream_start` defaults to `capturePolicy:"off"`. Key-event screenshots require explicit `capturePolicy:"key_events"` plus `redactText:false`; use that only in a prepared non-private fixture because visible screen text can be persisted.
 
-**Check versions before acting.** Run `--health` and compare the bridge protocol with the packaged component manifest. Refuse writes when protocol versions differ. This private candidate is tested on Windows 11 with Node.js 18+. Its per-user broker singleton/reconnect and tray command mapping are covered by automated tests, while live multi-host recovery and visible tray interaction remain unverified. Clean-machine installation, all DPI combinations, hot-plug displays, and overlay exclusion from every screenshot path are also still open.
+**Check versions before acting.** Run `--health` and compare the bridge protocol with the packaged component manifest. Refuse writes when protocol versions differ. This source candidate is tested on Windows 11 with Node.js 18+. Its per-user broker singleton/reconnect and tray command mapping are covered by automated tests, while live multi-host recovery and visible tray interaction remain unverified. Clean-machine installation, all DPI combinations, hot-plug displays, and overlay exclusion from every screenshot path are also still open.
 
 ## References
 

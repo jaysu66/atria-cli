@@ -1,6 +1,6 @@
 {
   "name": "atria-cli",
-  "version": "0.2.0-private.4",
+  "version": "0.2.0-rc.1",
   "description": "Atria local-first CLI entrypoint for browser, desktop, and recording capabilities.",
   "type": "module",
   "bin": {
@@ -14,7 +14,10 @@
     "build:candidates": "node scripts/build-candidates.mjs",
     "sync": "node scripts/sync-sources.mjs",
     "test": "node --test tests/*.test.mjs",
-    "verify": "node scripts/verify-bundle.mjs"
+    "verify": "node scripts/verify-bundle.mjs",
+    "release:metadata": "node scripts/generate-release-metadata.mjs",
+    "release:metadata:check": "node scripts/generate-release-metadata.mjs --check"
   },
-  "license": "SEE LICENSE-STATUS.md"
+  "license": "Apache-2.0",
+  "private": true
 }

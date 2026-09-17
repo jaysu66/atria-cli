@@ -3,14 +3,14 @@
   "version": "0.1.0+codex.20260622200454",
   "description": "Record Windows desktop workflows into semantic event streams and generate reusable Codex skills.",
   "author": {
-    "name": "Local developer"
+    "name": "Atria Project Authors"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Record & Replay Windows",
     "shortDescription": "Record Windows workflows and turn them into Codex skills.",
     "longDescription": "Record & Replay Windows captures desktop mouse, keyboard, foreground window, UI Automation context, DPI metadata, and key-event screenshots. It exposes event-stream MCP tools and can generate a local Codex skill from a completed recording.",
-    "developerName": "Local developer",
+    "developerName": "Atria Project Authors",
     "category": "Productivity",
     "capabilities": [
       "Interactive",

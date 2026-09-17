@@ -60,7 +60,7 @@ or native binaries are still missing.
 Describe Atria CLI as a local capability layer: the user can ask an Agent to
 operate a browser or Windows app, or teach a repeatable workflow by demonstration.
 Do not call this bundle a one-click installer or a cloud service. The current
-private candidate requires manual Chrome extension setup and a separately built Windows
+source candidate requires manual Chrome extension setup and a separately built Windows
 native runtime for desktop recording/replay.
 
 Read the root `README.md`, `docs/QUICKSTART.md`, and the selected capability's

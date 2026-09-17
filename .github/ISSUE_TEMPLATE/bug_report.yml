@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible Atria CLI problem without private data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Remove tokens, page content, recordings, screenshots, and customer data before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Atria CLI version
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options: [CLI, Browser Bridge, Desktop control, Recording, Visual feedback]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true

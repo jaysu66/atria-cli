@@ -156,7 +156,7 @@ sourceMeta['atria-recording-skill'] = { sourceCommit: null, sourceTreeHash: tree
 const componentsPath = join(root, 'manifests', 'components.json');
 const components = JSON.parse(readFileSync(componentsPath, 'utf8'));
 components.schemaVersion = 2;
-components.name = 'atria-cli-private-candidate';
+components.name = 'atria-cli-source-release-candidate';
 components.version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 components.generatedAt = new Date().toISOString();
 for (const component of components.components) {

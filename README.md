@@ -2,7 +2,7 @@
 
 一个本地优先的统一入口，把 Atria 的浏览器、Windows 桌面和工作流录制能力接给 Agent。
 
-当前版本是 **`0.2.0-private.4` 私有候选包**：尚未公开，也不是一键安装器。它只包含首批三类能力：
+当前版本是 **`0.2.0-rc.1` 源码开源候选**：仓库在最终确认前仍保持私有，也不是一键安装器。它只包含首批三类能力：
 
 - 浏览器控制：通过本地 Browser Bridge 和 Chrome 扩展操作用户主动暴露的 Chrome。
 - Windows 桌面控制：通过 UI Automation 读取和操作原生 Windows 窗口。
@@ -15,7 +15,8 @@ PPT、通用办公助手、公司业务流程、客户数据、登录状态、Co
 - [面向最终用户的完整使用指南](docs/USER-GUIDE.md)：安装、体验、三类能力、故障排查和安全边界。
 - [CLI 能力说明](docs/CLI-CAPABILITIES.md)：按任务选择 Skill，并了解 Agent 如何调用它们。
 - [快速开始](docs/QUICKSTART.md)：按命令启动浏览器或检查桌面运行时。
-- [组件许可状态](LICENSE-STATUS.md)：发布前必须逐项确认，不能把当前预览当作许可已清理完毕。
+- [组件许可状态](LICENSE-STATUS.md)：Apache-2.0、MIT 与第三方依赖的适用边界。
+- [来源边界](PROVENANCE.md)：哪些源码进入候选、哪些私人或运行数据被排除。
 - [组件清单](manifests/components.json)：机器可读的平台、能力和运行时要求。
 
 ## 每个 Skill 的说明
@@ -76,4 +77,4 @@ CLI 只负责稳定路由，不会静默安装依赖、读取登录会话、导�
 
 ## 当前边界
 
-浏览器组件可以优先作为独立公开项目继续推进；`record-replay-windows`、`atria-desktop` 与原生二进制仍需完成许可证、依赖和干净机器构建审查。当前候选没有自动更新器、Skill 市场、云端同步或完整安装器。更新应替换一整套固定版本并核对 SHA-256；回退时恢复上一整套，保留包外的用户录制、令牌和配置。发布前请以 [LICENSE-STATUS.md](LICENSE-STATUS.md)、候选 manifest 和实际 `doctor` 结果为准。
+当前仓库可按“源码候选”公开：自有 CLI、桌面/录制源码和 Skills 使用 Apache-2.0，Browser Bridge 保留 MIT，依赖许可证和 SPDX SBOM 在 `manifests/`。预编译 Windows 可执行文件不在公开仓库内，仍需单独的干净构建、签名和来源证明。当前候选没有自动更新器、Skill 市场、云端同步或完整安装器。更新应替换一整套固定版本并核对 SHA-256；回退时恢复上一整套，保留包外的用户录制、令牌和配置。发布前请以 [LICENSE-STATUS.md](LICENSE-STATUS.md)、候选 manifest 和实际 `doctor` 结果为准。

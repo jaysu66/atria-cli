@@ -46,7 +46,7 @@ node .\bin\atria.mjs skills list
 
 ## 许可、来源与更新
 
-此 Skill 是 Atria CLI 的总览文档，当前尚无单独确认的开源许可证；参见 [许可状态](../../LICENSE-STATUS.md)。不要据此推定底层组件都可以再分发。
+此 Skill 随 Atria CLI 以 Apache-2.0 发布；底层 Browser Bridge 保留 MIT，第三方依赖保留其上游许可证。完整边界见 [许可状态](../../LICENSE-STATUS.md)。
 
 随 Atria CLI 版本更新；更新前保留自己修改过的文件。可继续阅读 [用户指南](../../docs/USER-GUIDE.md) 和 [CLI 能力说明](../../docs/CLI-CAPABILITIES.md)。
 

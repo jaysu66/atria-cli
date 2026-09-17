@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(process.env.ATRIA_VERIFY_ROOT || fileURLToPath(new URL('..', import.meta.url)));
 const required = [
-  'README.md', 'LICENSE-STATUS.md', 'SECURITY.md', 'package.json', 'bin/atria.mjs',
+  'README.md', 'LICENSE', 'NOTICE', 'LICENSE-STATUS.md', 'SECURITY.md',
+  'THIRD_PARTY_NOTICES.md', 'PROVENANCE.md', 'TRADEMARKS.md', 'MAINTENANCE.md',
+  'package.json', 'bin/atria.mjs',
   'manifests/components.json', 'manifests/source-files.json',
+  'manifests/dependency-licenses.json', 'manifests/sbom.spdx.json',
   'packages/browser-bridge/mcp-server.js',
   'packages/browser-bridge/extension/content/visual-indicator.js',
   'packages/record-replay-windows/mcp/server.mjs',
@@ -19,6 +22,7 @@ const required = [
   'skills/atria-desktop/SKILL.md', 'skills/atria-desktop/README.md',
   'skills/atria-recording/SKILL.md', 'skills/atria-recording/README.md',
   'skills/record-replay-windows/SKILL.md', 'skills/record-replay-windows/README.md',
+  '.github/workflows/verify.yml', '.github/CODEOWNERS',
 ];
 const forbiddenDirectoryNames = new Set([
   '.git', '.codex', 'node_modules', 'target', 'coverage', '.next', 'dist',
@@ -32,6 +36,7 @@ const forbiddenFilePatterns = [
   /(?:^|[-_.])session[-_.]?index(?:[-_.]|$)/i,
   /(?:^|[-_.])event(?:s)?\.jsonl$/i,
   /\.(?:exe|dll|node|pdb|log|har|pem|pfx|key)$/i,
+  /(?:^|[-_.])refero(?:[-_.]|$)/i,
 ];
 const binaryExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff', '.woff2']);
 const secretPatterns = [

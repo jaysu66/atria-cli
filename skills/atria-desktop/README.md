@@ -38,4 +38,4 @@ Use `automation_pause`, `automation_resume`, and `automation_stop`. After pause 
 
 Stop active recordings, replace the Skill and matching runtime as one versioned set, run `--health`, and verify the protocol before writes. To roll back, restore both the prior Skill directory and prior runtime/binary hashes; user recordings and local token/config files live outside the package and must not be deleted.
 
-Tested: Windows 11, Node.js 18+, direct helper calls and an MCP client. Not yet proven: clean VM installation, every Agent host, tray UI, 100/150/200% multi-monitor alignment, hot-plug displays, and overlay exclusion from every screenshot API. Native redistribution licensing is still under review, so this is a private candidate.
+Tested: Windows 11, Node.js 18+, direct helper calls and an MCP client. Not yet proven: clean VM installation, every Agent host, tray UI, 100/150/200% multi-monitor alignment, hot-plug displays, and overlay exclusion from every screenshot API. Source is included in the Apache-2.0 candidate; no prebuilt native executable is distributed.

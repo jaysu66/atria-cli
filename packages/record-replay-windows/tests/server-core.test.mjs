@@ -16,6 +16,11 @@ test("event stream server registers the expected MCP tools", () => {
   });
   const names = Object.keys(server._registeredTools).sort();
   assert.deepEqual(names, [
+    "action_events_recent",
+    "automation_pause",
+    "automation_resume",
+    "automation_status",
+    "automation_stop",
     "computer_batch",
     "computer_click",
     "computer_drag",
@@ -38,8 +43,362 @@ test("event stream server registers the expected MCP tools", () => {
     "ui_set_value",
     "ui_snapshot",
     "ui_wait_for",
+    "visual_disable",
+    "visual_enable",
+    "visual_status",
   ]);
   assert.equal(server._registeredTools.event_stream_start._meta["openai/widgetAccessible"], true);
+});
+
+test("recording defaults to capturePolicy off", async () => {
+  let startInput = null;
+  const server = createEventStreamServer({
+    recorderClient: {
+      start: async (input) => {
+        startInput = input;
+        return { isRecording: true };
+      },
+      status: async () => ({}),
+      stop: async () => ({}),
+    },
+  });
+  await server._registeredTools.event_stream_start.handler({});
+  assert.equal(startInput.capturePolicy, "off");
+  assert.equal(startInput.redactText, true);
+  server.closeRecorder();
+});
+
+test("20-step batch and replay share one sanitized action-event path", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rrw-s4-"));
+  const sessionID = "twenty-step-replay";
+  const sessionDir = path.join(root, sessionID);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionDir, "events.jsonl"),
+    Array.from({ length: 20 }, (_value, index) => JSON.stringify({
+      type: "keyboard.key",
+      timestamp: new Date(1700000000000 + index).toISOString(),
+      input: { vkCode: 0x0d, keyName: "Enter" },
+    })).join("\n") + "\n",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(sessionDir, "suppressed_events.jsonl"), "", "utf8");
+  let operationSequence = 0;
+  const actor = {
+    actorBootId: "fake-boot",
+    createOperationId: () => `fake-boot:${++operationSequence}`,
+    addEventListener: () => () => {},
+    uiSnapshot: async () => ({
+      window: { hwnd: 101, pid: 202, title: "Fixture Window" },
+      elements: [{ i: 0, type: "Button", name: "Fixture", cx: 10, cy: 10, enabled: true }],
+    }),
+    screenshot: async () => ({}),
+    click: async () => ({ clicked: true }),
+    mouseMove: async () => ({ moved: true }),
+    typeText: async (params) => ({ typed: [...String(params.text || "")].length }),
+    key: async () => ({ keys: true }),
+    scroll: async () => ({ scrolled: true }),
+    windowFocus: async () => ({ focused: true, foreground: { hwnd: 101, pid: 202, processName: "fixture.exe", windowTitle: "Fixture Window" } }),
+    uiaFind: async () => ({ elements: [] }),
+    uiaInvoke: async () => ({ invoked: true }),
+    operationStatus: () => null,
+    pause: async () => ({ acknowledged: true }),
+    resume: async () => ({}),
+    stop: async () => ({ acknowledged: true }),
+    close: () => {},
+  };
+  const server = createEventStreamServer({
+    actorClient: actor,
+    automationLockPath: path.join(root, "desktop.lock"),
+    recorderClient: {
+      sessionRoot: root,
+      start: async () => ({}),
+      status: async () => ({}),
+      stop: async () => ({}),
+    },
+  });
+  t.after(() => {
+    server.closeRecorder();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  await server._registeredTools.ui_snapshot.handler({});
+  const secret = "fixture-secret-body";
+  const batch = await server._registeredTools.computer_batch.handler({
+    actions: Array.from({ length: 20 }, () => ({ action: "type", text: secret })),
+    returnState: false,
+    returnScreenshotPath: false,
+  });
+  assert.equal(batch.structuredContent.completed, true);
+  assert.equal(batch.structuredContent.results.length, 20);
+
+  const replay = await server._registeredTools.replay_run.handler({
+    sessionID,
+    stepDelayMs: 0,
+  });
+  assert.equal(replay.structuredContent.status, "succeeded");
+  assert.equal(replay.structuredContent.succeededCount, 20);
+
+  const events = server.actionCoordinator.recentEvents(1000);
+  const batchEvents = events.filter((event) => event.parentOperationId === batch.structuredContent.operationId);
+  const replayEvents = events.filter((event) => event.parentOperationId === replay.structuredContent.operationId);
+  assert.equal(batchEvents.filter((event) => event.phase === "prepare").length, 20);
+  assert.equal(batchEvents.filter((event) => event.phase === "input_dispatched").length, 20);
+  assert.equal(replayEvents.filter((event) => event.phase === "prepare").length, 20);
+  assert.equal(replayEvents.filter((event) => event.phase === "input_dispatched").length, 20);
+  assert.equal(new Set(batchEvents.filter((event) => event.phase === "input_dispatched").map((event) => event.operationId)).size, 20);
+  assert.equal(JSON.stringify(events).includes(secret), false);
+});
+
+test("parent operation ids deduplicate batch, replay, and composite type across 100 concurrent calls", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rrw-parent-idempotency-"));
+  const sessionID = "one-step-replay";
+  const sessionDir = path.join(root, sessionID);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, "events.jsonl"), JSON.stringify({
+    type: "keyboard.key",
+    timestamp: new Date().toISOString(),
+    application: { processName: "fixture.exe", pid: 202 },
+    window: { title: "Fixture Window", hwnd: 101 },
+    input: { vkCode: 0x0d, keyName: "Enter" },
+  }) + "\n", "utf8");
+  fs.writeFileSync(path.join(sessionDir, "suppressed_events.jsonl"), "", "utf8");
+
+  let operationSequence = 0;
+  const counts = { click: 0, type: 0, key: 0, focus: 0 };
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const actor = {
+    actorBootId: "fake-boot",
+    createOperationId: () => `fake-boot:${++operationSequence}`,
+    addEventListener: () => () => {},
+    waitForOperationSafety: async (operationId) => ({ operationId, safe: true }),
+    uiSnapshot: async () => ({
+      window: { hwnd: 101, pid: 202, title: "Fixture Window" },
+      elements: [{ i: 0, type: "Edit", name: "Fixture", automationId: "FixtureInput", cx: 10, cy: 10, enabled: true }],
+    }),
+    screenshot: async () => ({}),
+    click: async () => { counts.click += 1; await pause(); return { clicked: true }; },
+    mouseMove: async () => ({ moved: true }),
+    typeText: async () => { counts.type += 1; await pause(); return { typed: true }; },
+    key: async () => { counts.key += 1; await pause(); return { keys: true }; },
+    scroll: async () => ({ scrolled: true }),
+    windowFocus: async () => {
+      counts.focus += 1;
+      await pause();
+      return { focused: true, foreground: { hwnd: 101, pid: 202, processName: "fixture.exe", windowTitle: "Fixture Window" } };
+    },
+    uiaFind: async () => ({ elements: [] }),
+    uiaInvoke: async () => ({ invoked: true }),
+    operationStatus: () => null,
+    pause: async () => ({ acknowledged: true }),
+    resume: async () => ({}),
+    stop: async () => ({ acknowledged: true }),
+    close: () => {},
+  };
+  const server = createEventStreamServer({
+    actorClient: actor,
+    automationLockPath: path.join(root, "desktop.lock"),
+    recorderClient: {
+      sessionRoot: root,
+      start: async () => ({}),
+      status: async () => ({}),
+      stop: async () => ({}),
+    },
+  });
+  const serviceBootId = server.actionCoordinator.bootId;
+  assert.notEqual(serviceBootId, actor.actorBootId);
+  t.after(() => {
+    server.closeRecorder();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const commonFeedback = { returnState: false, returnScreenshotPath: false };
+  const batchInput = {
+    operationId: `${serviceBootId}:parent-batch`,
+    actions: [{ action: "type", text: "once" }],
+    expect: { titleExact: "Fixture Window" },
+    ...commonFeedback,
+  };
+  const batches = await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.computer_batch.handler(batchInput)));
+  assert.equal(counts.type, 1);
+  assert.ok(batches.every((result) => result.structuredContent.operationId === batchInput.operationId));
+  await server._registeredTools.computer_batch.handler(batchInput);
+  assert.equal(counts.type, 1);
+  await assert.rejects(
+    server._registeredTools.computer_batch.handler({ ...batchInput, actions: [{ action: "type", text: "changed" }] }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+  const batchStatus = await server._registeredTools.automation_status.handler({ operationId: batchInput.operationId });
+  assert.equal(batchStatus.structuredContent.operation.state, "succeeded");
+
+  const replayInput = { operationId: `${serviceBootId}:parent-replay`, sessionID, stepDelayMs: 0 };
+  const replays = await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.replay_run.handler(replayInput)));
+  assert.equal(counts.focus, 1);
+  assert.equal(counts.key, 1);
+  assert.ok(replays.every((result) => result.structuredContent.operationId === replayInput.operationId));
+  await assert.rejects(
+    server._registeredTools.replay_run.handler({ ...replayInput, startIndex: 1 }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+
+  const snapshot = await server._registeredTools.ui_snapshot.handler({});
+  const typeInput = {
+    operationId: `${serviceBootId}:parent-composite-type`,
+    text: "only once",
+    elementIndex: 0,
+    snapshotId: snapshot.structuredContent.snapshotId,
+    ...commonFeedback,
+  };
+  const beforeComposite = { click: counts.click, type: counts.type };
+  await Promise.all(Array.from({ length: 100 }, () => server._registeredTools.computer_type.handler(typeInput)));
+  assert.equal(counts.click - beforeComposite.click, 1);
+  assert.equal(counts.type - beforeComposite.type, 1);
+  await assert.rejects(
+    server._registeredTools.computer_type.handler({ ...typeInput, text: "changed" }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+});
+
+test("parent operations reject expired boot and mismatched session before dispatch", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rrw-parent-binding-"));
+  const sessionID = "boot-bound-replay";
+  const sessionDir = path.join(root, sessionID);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, "events.jsonl"), JSON.stringify({
+    type: "keyboard.key",
+    timestamp: new Date().toISOString(),
+    application: { processName: "fixture.exe", pid: 202 },
+    window: { title: "Fixture Window", hwnd: 101 },
+    input: { vkCode: 0x0d, keyName: "Enter" },
+  }) + "\n", "utf8");
+  fs.writeFileSync(path.join(sessionDir, "suppressed_events.jsonl"), "", "utf8");
+
+  const counts = { click: 0, type: 0, key: 0, focus: 0 };
+  const actor = {
+    actorBootId: "boot-one",
+    ensureStarted: () => {},
+    createOperationId() { return `${this.actorBootId}:generated`; },
+    addEventListener: () => () => {},
+    waitForOperationSafety: async (operationId) => ({ operationId, safe: true }),
+    uiSnapshot: async () => ({
+      window: { hwnd: 101, pid: 202, title: "Fixture Window" },
+      elements: [{ i: 0, type: "Edit", name: "Fixture", cx: 10, cy: 10, enabled: true }],
+    }),
+    screenshot: async () => ({}),
+    click: async () => { counts.click += 1; return { clicked: true }; },
+    mouseMove: async () => ({ moved: true }),
+    typeText: async () => { counts.type += 1; return { typed: true }; },
+    key: async () => { counts.key += 1; return { keyed: true }; },
+    scroll: async () => ({ scrolled: true }),
+    windowFocus: async () => {
+      counts.focus += 1;
+      return { focused: true, foreground: { hwnd: 101, pid: 202, processName: "fixture.exe", windowTitle: "Fixture Window" } };
+    },
+    uiaFind: async () => ({ elements: [] }),
+    uiaInvoke: async () => ({ invoked: true }),
+    operationStatus: () => null,
+    close: () => {},
+  };
+  const createServer = () => createEventStreamServer({
+    actorClient: actor,
+    automationLockPath: path.join(root, "desktop.lock"),
+    recorderClient: { sessionRoot: root, start: async () => ({}), status: async () => ({}), stop: async () => ({}) },
+  });
+  const server = createServer();
+  const serviceBootId = server.actionCoordinator.bootId;
+  assert.notEqual(serviceBootId, actor.actorBootId);
+  t.after(() => {
+    server.closeRecorder();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const feedback = { returnState: false, returnScreenshotPath: false };
+
+  const initialBatchInput = {
+    sessionId: "session-a",
+    actions: [{ action: "type", text: "once" }],
+    expect: { titleExact: "Fixture Window" },
+    ...feedback,
+  };
+  const initialBatch = await server._registeredTools.computer_batch.handler(initialBatchInput);
+  const batchInput = {
+    ...initialBatchInput,
+    operationId: initialBatch.structuredContent.operationId,
+  };
+  assert.ok(batchInput.operationId.startsWith(`${serviceBootId}:`));
+  assert.equal(batchInput.operationId.startsWith(`${actor.actorBootId}:`), false);
+  assert.equal(counts.type, 1);
+
+  const serialRetry = await server._registeredTools.computer_batch.handler(batchInput);
+  assert.equal(serialRetry.structuredContent.operationId, batchInput.operationId);
+  assert.equal(counts.type, 1);
+
+  const retries = await Promise.all(Array.from(
+    { length: 100 },
+    () => server._registeredTools.computer_batch.handler(batchInput),
+  ));
+  assert.equal(counts.type, 1);
+  assert.ok(retries.every((result) => result.structuredContent.operationId === batchInput.operationId));
+  const currentStatus = await server._registeredTools.automation_status.handler({ operationId: batchInput.operationId });
+  assert.equal(currentStatus.structuredContent.operation.state, "succeeded");
+  await assert.rejects(
+    server._registeredTools.computer_batch.handler({ ...batchInput, sessionId: "session-b" }),
+    (error) => error.code === "SESSION_MISMATCH",
+  );
+  assert.equal(counts.type, 1);
+
+  actor.actorBootId = "boot-two";
+  await assert.rejects(
+    server._registeredTools.computer_batch.handler(batchInput),
+    (error) => error.code === "BOOT_MISMATCH" && error.status === "unknown",
+  );
+  assert.equal(counts.type, 1);
+  const expiredStatus = await server._registeredTools.automation_status.handler({ operationId: batchInput.operationId });
+  assert.equal(expiredStatus.structuredContent.operation.state, "unknown");
+  assert.equal(expiredStatus.structuredContent.operation.error.code, "BOOT_MISMATCH");
+
+  const snapshot = await server._registeredTools.ui_snapshot.handler({});
+  const compositeInput = {
+    operationId: `${serviceBootId}:composite`,
+    text: "once",
+    elementIndex: 0,
+    snapshotId: snapshot.structuredContent.snapshotId,
+    ...feedback,
+  };
+  await server._registeredTools.computer_type.handler(compositeInput);
+  assert.deepEqual({ click: counts.click, type: counts.type }, { click: 1, type: 2 });
+  actor.actorBootId = "boot-three";
+  await assert.rejects(
+    server._registeredTools.computer_type.handler(compositeInput),
+    (error) => error.code === "BOOT_MISMATCH",
+  );
+  assert.deepEqual({ click: counts.click, type: counts.type }, { click: 1, type: 2 });
+
+  const replayInput = { operationId: `${serviceBootId}:replay`, sessionID, stepDelayMs: 0 };
+  await server._registeredTools.replay_run.handler(replayInput);
+  assert.deepEqual({ focus: counts.focus, key: counts.key }, { focus: 1, key: 1 });
+  actor.actorBootId = "boot-four";
+  await assert.rejects(
+    server._registeredTools.replay_run.handler(replayInput),
+    (error) => error.code === "BOOT_MISMATCH",
+  );
+  assert.deepEqual({ focus: counts.focus, key: counts.key }, { focus: 1, key: 1 });
+
+  const currentActorBootInput = {
+    ...initialBatchInput,
+    operationId: `${serviceBootId}:same-actor-new-service`,
+  };
+  await server._registeredTools.computer_batch.handler(currentActorBootInput);
+  assert.equal(counts.type, 3);
+
+  const replacementServer = createServer();
+  assert.notEqual(replacementServer.actionCoordinator.bootId, serviceBootId);
+  assert.equal(actor.actorBootId, "boot-four");
+  await assert.rejects(
+    replacementServer._registeredTools.computer_batch.handler(currentActorBootInput),
+    (error) => error.code === "BOOT_MISMATCH" && error.status === "unknown",
+  );
+  assert.equal(counts.type, 3);
+  replacementServer.closeRecorder();
 });
 
 test("event stream stop auto-generates a skill when Codex did not provide a summary", async () => {

@@ -1,63 +1,41 @@
 # Atria Desktop Skill
 
-让 Agent 读取和操作真实 Windows 桌面，并调用录制与回放能力。它是 Record/Replay Windows 引擎的使用入口，不是单靠 Markdown 就能运行的桌面程序。执行协议见 [SKILL.md](SKILL.md)。
+This Skill lets an Agent inspect and operate the current user's Windows desktop through UI Automation and real input, record demonstrations, replay deterministic workflows, and optionally show a click-through action overlay. It works without the Atria desktop product.
 
-## 能做什么
+## Input and output
 
-- 列出和聚焦窗口，读取 UI Automation 控件树。
-- 按控件索引或名称点击、设置字段值、输入文字和快捷键。
-- 移动鼠标、拖拽、滚动、截图与批量执行确定的动作。
-- 开始和停止工作流录制，生成语义化 Skill，dry-run 后回放。
+- Input: one named tool plus a JSON argument file, for example `computer_click` with an element index from `ui_snapshot`.
+- Output: structured text, a truthful operation status, a raw JSON evidence path, and an image path only when a screenshot was requested.
+- Sensitive typed content is redacted from recording and visual labels. Redacted text is returned as `needsAgent`, not guessed.
 
-输入是目标窗口、控件、待填内容或待演示的工作流；输出是当前 UI 状态、动作结果、截图、原始 JSON、录制会话和生成的 Skill 路径。
+## Requirements and install
 
-## 安装与依赖
+- Windows 11, Node.js 18+, and the matching `record-replay-windows` source/dependencies.
+- Native `actor.exe` and `recorder.exe`; `overlay.exe` is optional.
 
-需要 Windows、Node.js 18+、`packages/record-replay-windows`、该组件的 npm 依赖，以及 Rust/native 构建所需环境。预览包没有携带 `node_modules`、`actor.exe` 或 `recorder.exe`。
-
-先审阅 [组件说明](../../packages/record-replay-windows/README.md) 与 [许可状态](../../LICENSE-STATUS.md)，在组件目录安装依赖并构建：
+From the kit root:
 
 ```powershell
-cd packages\record-replay-windows
-npm install
-npm run build:native
-npm run smoke:mcp
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -DesktopDir C:\path\to\record-replay-windows
 ```
 
-回到 Atria CLI 根目录后，配置实际 Agent 进程能继承的环境：
+The installer copies this Skill into `~/.agents/skills`. Explicit `-DesktopDir` or `ATRIA_DESKTOP_SUITE_DIR` wins over the bundled runtime; documented legacy paths are compatibility fallbacks only.
+
+## Example and user experience
 
 ```powershell
-$env:ATRIA_DESKTOP_SUITE_DIR = (Resolve-Path ".\packages\record-replay-windows").Path
-node .\bin\atria.mjs doctor --json
-node .\skills\atria-desktop\scripts\desktop.js --health
+node "$HOME\.agents\skills\atria-desktop\scripts\desktop.js" ui_snapshot
+node "$HOME\.agents\skills\atria-desktop\scripts\desktop.js" visual_enable '{"required":false}'
 ```
 
-如需自动发现，将完整 Skill 目录放进 Agent 的 Skill 根目录；引擎仍需单独保留。辅助脚本首个调用会启动持久桌面 daemon，默认绑定 `127.0.0.1:47653`。配置细节见 [setup.md](references/setup.md)。
+The Agent first reads numbered accessible controls, then acts on an index and verifies the returned state. When enabled, the independent overlay shows the true action location/status while remaining click-through and non-activating. `event_stream_panel` is a separate host widget and is unavailable in hosts that do not render MCP resources.
 
-## 首次体验与例子
+## Pause, stop, privacy
 
-先打开不含隐私内容的测试应用，再对 Agent 说：
+Use `automation_pause`, `automation_resume`, and `automation_stop`. After pause is acknowledged, the Agent must not issue another write until resume. Before recording, close private windows and use `excludeApps`; recording covers the whole desktop. Recording screenshots are off by default. Explicit key-event screenshot capture requires `redactText:false` and may persist visible private content. Screenshots and raw results stay on the local machine.
 
-- “列出可见窗口，先不要点击。”
-- “读取记事本窗口的控件，输入‘自动化测试’，不要保存或关闭窗口。”
-- “我会演示一次导出测试文件的过程，请录制；回放前先展示计划。”
+## Update and rollback
 
-正常交互是先获取 `ui_snapshot`，核实目标和焦点，再操作并检查返回状态。`ui_set_value` 支持回读验证；普通 `computer_type` 不能单独证明目标字段已写入。
+Stop active recordings, replace the Skill and matching runtime as one versioned set, run `--health`, and verify the protocol before writes. To roll back, restore both the prior Skill directory and prior runtime/binary hashes; user recordings and local token/config files live outside the package and must not be deleted.
 
-## 限制与安全
-
-- 仅支持 Windows，不提供 macOS/Linux 桌面执行。
-- 自绘界面可能没有 UIA 控件树，需截图辅助；截图坐标需要按返回缩放比例换算。
-- UI 变化会让控件索引过期，不能把旧索引反复用于新页面。
-- 输入发往当前焦点窗口；必须先确认窗口聚焦成功。
-- 关闭未保存窗口、删除、发送、支付或提交都需要确认；这是用户真实电脑，动作立即可见。
-- 截图、UI 文本和录制文件可能包含敏感信息，也可能进入 Agent 上下文和日志。
-- 录制范围是整个桌面，开始前关闭私人应用并设置排除项。录制中不能停止 daemon。
-- 生成的工作流会写入本地 Skill 根目录，默认通常为 `~/.codex/skills`；可通过 `CODEX_SKILLS_ROOT` 配置。先在隔离的测试目录体验。
-- 回放先 `dryRun: true`；被脱敏的凭据需要用户自行输入，界面变化也可能要求 Agent 接手。
-
-## 许可、来源与更新
-
-这是 dsh 封装层的 Skill，依赖 Record/Replay Windows；两者的来源与再分发许可仍需确认，见 [LICENSE-STATUS.md](../../LICENSE-STATUS.md)。当前不宣称已具备正式开源授权或干净机器完整验收。
-
-更新时同步 Skill 和引擎，保留用户录制与自行修改的 Skill。没有活动录制时才重启旧 daemon。完整录制流程见 [recording.md](references/recording.md)。
+Tested: Windows 11, Node.js 18+, direct helper calls and an MCP client. Not yet proven: clean VM installation, every Agent host, tray UI, 100/150/200% multi-monitor alignment, hot-plug displays, and overlay exclusion from every screenshot API. Source is included in the Apache-2.0 candidate; no prebuilt native executable is distributed.

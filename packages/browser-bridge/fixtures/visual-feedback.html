@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Atria Visual Feedback Fixture</title>
+  <style>
+    body { margin: 0; min-height: 1800px; font: 16px/1.5 system-ui,sans-serif; background: #f8fafc; color: #17202a; }
+    main { width: 720px; margin: 80px auto; padding: 32px; background: white; border: 1px solid #dbe4ee; border-radius: 16px; }
+    .row { display: flex; gap: 24px; align-items: center; margin: 24px 0; }
+    button, input { min-width: 180px; min-height: 48px; font: inherit; }
+    #scroll-target { margin-top: 900px; padding: 30px; border: 2px dashed #1971c2; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>可视反馈验收夹具</h1>
+    <div class="row">
+      <button id="ref-button" type="button">引用点击 <span id="ref-count">0</span></button>
+      <button id="coordinate-button" type="button">坐标点击 <span id="coordinate-count">0</span></button>
+    </div>
+    <label>测试输入 <input id="visual-input" aria-label="测试输入"></label>
+    <div id="scroll-target">滚动目标</div>
+  </main>
+  <script>
+    for (const name of ['ref', 'coordinate']) {
+      const button = document.getElementById(`${name}-button`);
+      const count = document.getElementById(`${name}-count`);
+      button.addEventListener('click', () => { count.textContent = String(Number(count.textContent) + 1); });
+    }
+  </script>
+</body>
+</html>

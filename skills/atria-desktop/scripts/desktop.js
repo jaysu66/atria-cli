@@ -17,6 +17,7 @@
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -26,12 +27,89 @@ const HOST = process.env.ATRIA_DESKTOP_HOST || '127.0.0.1';
 const PORT = Number(process.env.ATRIA_DESKTOP_PORT || 47653);
 const OUT_DIR = process.env.ATRIA_DESKTOP_OUT || path.join(os.tmpdir(), 'atria-desktop');
 const MAX_STDOUT = 30000;
+const DESKTOP_BRIDGE_PROTOCOL = 2;
+const TOKEN_FILE = process.env.ATRIA_DESKTOP_AUTH_FILE || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Atria', 'desktop-bridge.token');
+
+function validToken(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{32,}$/.test(value);
+}
+
+function readClientToken() {
+  const supplied = process.env.ATRIA_DESKTOP_AUTH_TOKEN;
+  if (supplied) return supplied;
+  try { return fs.readFileSync(TOKEN_FILE, 'utf8').trim(); } catch (_) { return ''; }
+}
+
+function loadOrCreateDaemonToken() {
+  const supplied = process.env.ATRIA_DESKTOP_AUTH_TOKEN;
+  if (supplied !== undefined) {
+    if (!validToken(supplied)) throw new Error('ATRIA_DESKTOP_AUTH_TOKEN must be at least 32 base64url characters.');
+    return supplied;
+  }
+  const existing = readClientToken();
+  if (existing) {
+    if (!validToken(existing)) throw new Error('Invalid desktop bridge token file: ' + TOKEN_FILE);
+    return existing;
+  }
+  fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
+  const token = crypto.randomBytes(32).toString('base64url');
+  fs.writeFileSync(TOKEN_FILE, token + '\n', { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  return token;
+}
+
+function tokenMatches(expected, received) {
+  if (!validToken(received)) return false;
+  const left = Buffer.from(expected);
+  const right = Buffer.from(received);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(function (key) { return [key, stableValue(value[key])]; }));
+  }
+  return value;
+}
+
+function callFingerprint(tool, args) {
+  return crypto.createHash('sha256').update(JSON.stringify(stableValue({ tool: tool, args: args || {} }))).digest('hex');
+}
+
+function toolOutcome(result) {
+  let payload = result && result.structuredContent;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    for (const item of (result && result.content) || []) {
+      if (!item || item.type !== 'text' || typeof item.text !== 'string') continue;
+      try {
+        const parsed = JSON.parse(item.text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          payload = parsed;
+          break;
+        }
+      } catch (_) {}
+    }
+  }
+  payload = payload && typeof payload === 'object' ? payload : {};
+  const allowed = new Set(['succeeded', 'failed', 'partial', 'unknown', 'cancelled', 'needs_agent']);
+  const status = allowed.has(payload.status) ? payload.status
+    : allowed.has(payload.overallStatus) ? payload.overallStatus
+      : result && result.isError ? 'failed' : 'succeeded';
+  const last = Array.isArray(payload.results) ? payload.results[payload.results.length - 1] : null;
+  return {
+    status: status,
+    code: payload.code || (last && last.code) || null,
+    payload: payload,
+  };
+}
 
 /** Locate the record-replay-windows suite. Override with ATRIA_DESKTOP_SUITE_DIR. */
 function resolveSuiteDir() {
+  const bundled = path.resolve(__dirname, '..', '..', '..', 'packages', 'record-replay-windows');
   const candidates = [
     process.env.ATRIA_DESKTOP_SUITE_DIR,
     process.env.AGENT_WORKBENCH_DESKTOP_AUTOMATION_DIR,
+    bundled,
     path.join(os.homedir(), 'Desktop', 'codex-record-replay-computer-use-suite', 'plugins', 'record-replay-windows'),
     path.join(os.homedir(), 'codex-personal-marketplace', 'plugins', 'record-replay-windows'),
   ].filter(Boolean);
@@ -51,6 +129,10 @@ function runDaemon() {
     console.error('FATAL: record-replay-windows suite not found. Set ATRIA_DESKTOP_SUITE_DIR.');
     process.exit(2);
   }
+  const authToken = loadOrCreateDaemonToken();
+  const bootId = crypto.randomUUID();
+  const maxOperations = Number(process.env.ATRIA_DESKTOP_MAX_OPERATIONS || 256);
+  const operations = new Map();
 
   const child = spawn(process.execPath, [path.join('mcp', 'server.mjs')], {
     cwd: suiteDir,
@@ -78,7 +160,12 @@ function runDaemon() {
         const entry = pending.get(msg.id);
         pending.delete(msg.id);
         clearTimeout(entry.timer);
-        entry.resolve(msg);
+        clearTimeout(entry.retentionTimer);
+        if (entry.timedOut) {
+          try { entry.onLate(msg); } catch (_) {}
+        } else {
+          entry.resolve(msg);
+        }
       }
     }
   });
@@ -90,15 +177,31 @@ function runDaemon() {
     process.exit(1);
   });
 
-  function rpc(method, params, timeoutMs) {
-    timeoutMs = timeoutMs || 180000;
+  function rpc(method, params, timeoutMs, options) {
+    timeoutMs = timeoutMs || Number(process.env.ATRIA_DESKTOP_REQUEST_TIMEOUT_MS || 180000);
+    options = options || {};
     return new Promise(function (resolve, reject) {
       const id = nextId++;
+      const entry = {
+        resolve: resolve,
+        timer: null,
+        retentionTimer: null,
+        timedOut: false,
+        onLate: typeof options.onLate === 'function' ? options.onLate : function () {},
+      };
       const timer = setTimeout(function () {
-        pending.delete(id);
+        if (options.retainLateResult) {
+          entry.timedOut = true;
+          const retentionMs = Math.max(1000, Number(process.env.ATRIA_DESKTOP_LATE_RESULT_TTL_MS || 600000));
+          entry.retentionTimer = setTimeout(function () { pending.delete(id); }, retentionMs);
+          entry.retentionTimer.unref?.();
+        } else {
+          pending.delete(id);
+        }
         reject(new Error(method + ' timed out after ' + timeoutMs + 'ms'));
       }, timeoutMs);
-      pending.set(id, { resolve: resolve, timer: timer });
+      entry.timer = timer;
+      pending.set(id, entry);
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params }) + '\n');
     });
   }
@@ -120,14 +223,117 @@ function runDaemon() {
     console.error('[daemon] ready, ' + toolList.length + ' tools');
   }
 
+  function operationSummary(operation) {
+    return {
+      operationId: operation.id,
+      bootId: bootId,
+      tool: operation.tool,
+      state: operation.state,
+      createdAt: operation.createdAt,
+      timedOutAt: operation.timedOutAt || null,
+      settledAt: operation.settledAt || null,
+      result: operation.result || null,
+      error: operation.error || null,
+    };
+  }
+
+  function runOperation(parsed) {
+    const operationId = parsed.operationId || (bootId + ':' + crypto.randomUUID());
+    if (typeof operationId !== 'string' || operationId.indexOf(bootId + ':') !== 0) {
+      const error = new Error('operationId belongs to an expired desktop bridge boot; it will not be re-executed');
+      error.code = 'BOOT_MISMATCH';
+      throw error;
+    }
+    const fingerprint = callFingerprint(parsed.tool, parsed.args || {});
+    const existing = operations.get(operationId);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        const error = new Error('the same operationId was reused with different arguments');
+        error.code = 'IDEMPOTENCY_CONFLICT';
+        throw error;
+      }
+      if (existing.promise) return existing.promise;
+      if (existing.result) return Promise.resolve(existing.result);
+      const error = new Error('operation outcome is unknown; query it before deciding whether to retry');
+      error.code = 'EXECUTION_UNKNOWN';
+      error.operationId = operationId;
+      throw error;
+    }
+    if (operations.size >= maxOperations) {
+      const error = new Error('desktop operation capacity reached for this boot; refusing new work to preserve idempotency');
+      error.code = 'CAPACITY_REACHED';
+      throw error;
+    }
+    const operation = {
+      id: operationId,
+      tool: parsed.tool,
+      fingerprint: fingerprint,
+      state: 'dispatched',
+      createdAt: new Date().toISOString(),
+      timedOutAt: null,
+      settledAt: null,
+      result: null,
+      error: null,
+      promise: null,
+    };
+    operations.set(operationId, operation);
+    function settleOperation(out) {
+      operation.settledAt = new Date().toISOString();
+      if (out.error) {
+        operation.state = 'failed';
+        operation.error = out.error.message || String(out.error);
+        operation.result = { ok: false, operationId: operationId, status: 'failed', error: operation.error, raw: out };
+      } else {
+        const outcome = toolOutcome(out.result);
+        operation.state = outcome.status;
+        operation.error = out.result && out.result.isError
+          ? (outcome.payload.error || outcome.payload.message || outcome.code || outcome.status)
+          : null;
+        operation.result = {
+          ok: outcome.status === 'succeeded',
+          operationId: operationId,
+          status: outcome.status,
+          ...(outcome.code ? { code: outcome.code } : {}),
+          result: out.result,
+        };
+      }
+      operation.promise = null;
+      return operation.result;
+    }
+    operation.promise = rpc(
+      'tools/call',
+      { name: parsed.tool, arguments: parsed.args || {} },
+      undefined,
+      { retainLateResult: true, onLate: settleOperation }
+    )
+      .then(settleOperation)
+      .catch(function (error) {
+        if (operation.state === 'succeeded' || operation.state === 'failed') return operation.result;
+        operation.state = 'unknown';
+        operation.error = error.message;
+        operation.timedOutAt = new Date().toISOString();
+        operation.promise = null;
+        operation.result = { ok: false, operationId: operationId, status: 'unknown', code: 'EXECUTION_UNKNOWN', error: error.message };
+        return operation.result;
+      });
+    return operation.promise;
+  }
+
   const server = http.createServer(function (req, res) {
     function send(code, obj) {
       res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(obj));
     }
+    const host = String(req.headers.host || '').toLowerCase();
+    if (host !== '127.0.0.1:' + PORT && host !== 'localhost:' + PORT) return send(403, { ok: false, code: 'HOST_REJECTED', error: 'loopback Host required' });
+    if (req.headers.origin) return send(403, { ok: false, code: 'ORIGIN_REJECTED', error: 'browser origins are not allowed on the desktop control bridge' });
+    const authenticated = tokenMatches(authToken, req.headers['x-atria-token']);
     if (req.url === '/health') {
-      return send(200, { ok: true, ready: ready, suiteDir: suiteDir, tools: toolList.length, pid: process.pid });
+      return send(200, authenticated
+        ? { ok: true, ready: ready, suiteDir: suiteDir, tools: toolList.length, pid: process.pid, bootId: bootId, protocolVersion: DESKTOP_BRIDGE_PROTOCOL, authentication: 'paired', operations: operations.size, maxOperations: maxOperations }
+        : { ok: true, ready: ready, protocolVersion: DESKTOP_BRIDGE_PROTOCOL, bootId: bootId, authentication: 'required' });
     }
+    if (!authenticated) return send(401, { ok: false, code: 'AUTH_REQUIRED', error: 'local desktop pairing credential required' });
     if (req.url === '/tools') {
       return send(200, {
         ok: true,
@@ -138,6 +344,13 @@ function runDaemon() {
       send(200, { ok: true });
       setTimeout(function () { try { child.kill(); } catch (_) {} process.exit(0); }, 50);
       return;
+    }
+    if (req.method === 'GET' && req.url.indexOf('/operations/') === 0) {
+      const operationId = decodeURIComponent(req.url.slice('/operations/'.length));
+      const operation = operations.get(operationId);
+      return operation
+        ? send(200, { ok: true, operation: operationSummary(operation) })
+        : send(404, { ok: false, code: 'UNKNOWN_OR_EXPIRED', bootId: bootId, operationId: operationId });
     }
     if (req.method !== 'POST' || req.url !== '/call') {
       return send(404, { ok: false, error: 'not found' });
@@ -154,13 +367,16 @@ function runDaemon() {
       }
       if (!ready) return send(503, { ok: false, error: 'daemon still initializing' });
       try {
-        const out = await rpc('tools/call', { name: parsed.tool, arguments: parsed.args || {} });
-        if (out.error) {
-          return send(200, { ok: false, error: out.error.message || String(out.error), raw: out });
-        }
-        return send(200, { ok: true, result: out.result });
+        const out = await runOperation(parsed);
+        return send(200, out);
       } catch (err) {
-        return send(200, { ok: false, error: err.message });
+        return send(err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'BOOT_MISMATCH' ? 409 : 200, {
+          ok: false,
+          status: err.code === 'EXECUTION_UNKNOWN' ? 'unknown' : 'failed',
+          code: err.code || 'CALL_FAILED',
+          operationId: err.operationId || parsed.operationId || null,
+          error: err.message,
+        });
       }
     });
   });
@@ -185,9 +401,12 @@ function runDaemon() {
 function request(method, urlPath, payload) {
   return new Promise(function (resolve, reject) {
     const data = payload ? Buffer.from(JSON.stringify(payload), 'utf8') : null;
-    const headers = data
-      ? { 'Content-Type': 'application/json', 'Content-Length': data.length }
-      : {};
+    const token = readClientToken();
+    const headers = Object.assign(
+      {},
+      data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {},
+      token ? { 'X-Atria-Token': token } : {},
+    );
     const req = http.request(
       { host: HOST, port: PORT, path: urlPath, method: method, headers: headers },
       function (res) {
@@ -196,7 +415,15 @@ function request(method, urlPath, payload) {
         res.on('data', function (d) { body += d; });
         res.on('end', function () {
           try {
-            resolve(JSON.parse(body));
+            const parsed = JSON.parse(body);
+            if ((res.statusCode || 500) >= 400) {
+              const error = new Error((parsed.code ? parsed.code + ': ' : '') + (parsed.error || 'desktop bridge request failed'));
+              error.statusCode = res.statusCode;
+              error.response = parsed;
+              reject(error);
+              return;
+            }
+            resolve(parsed);
           } catch (e) {
             reject(new Error('bad response: ' + body.slice(0, 200)));
           }
@@ -224,7 +451,7 @@ async function waitForDaemon(timeoutMs) {
   while (Date.now() < deadline) {
     try {
       const h = await request('GET', '/health');
-      if (h && h.ready) return h;
+      if (h && h.ready && h.authentication !== 'required') return h;
     } catch (_) {}
     await new Promise(function (r) { setTimeout(r, 400); });
   }
@@ -234,9 +461,11 @@ async function waitForDaemon(timeoutMs) {
 async function ensureDaemon() {
   try {
     const h = await request('GET', '/health');
-    if (h && h.ready) return h;
+    if (h && h.ready && h.authentication !== 'required') return h;
+    if (h && h.authentication === 'required') throw new Error('desktop bridge is running but this client does not have its local token');
     return await waitForDaemon();
-  } catch (_) {
+  } catch (error) {
+    if (error.message && error.message.indexOf('does not have its local token') >= 0) throw error;
     startDaemon();
     return await waitForDaemon();
   }
@@ -301,6 +530,12 @@ async function main() {
     }
     return;
   }
+  if (argv[0] === '--status') {
+    const operationId = argv[1];
+    if (!operationId) throw new Error('usage: node desktop.js --status <operationId>');
+    console.log(JSON.stringify(await request('GET', '/operations/' + encodeURIComponent(operationId)), null, 2));
+    return;
+  }
 
   const tool = argv[0];
   if (!tool) {
@@ -316,8 +551,9 @@ async function main() {
       : JSON.parse(spec);
   }
 
-  await ensureDaemon();
-  const out = await request('POST', '/call', { tool: tool, args: args });
+  const daemon = await ensureDaemon();
+  const operationId = args.operationId || (daemon.bootId ? daemon.bootId + ':' + crypto.randomUUID() : undefined);
+  const out = await request('POST', '/call', { tool: tool, args: args, operationId: operationId });
   if (!out.ok) {
     console.error('ERROR: ' + out.error);
     process.exit(1);

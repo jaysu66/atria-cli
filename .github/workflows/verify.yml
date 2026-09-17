@@ -1,0 +1,46 @@
+name: Verify public boundary
+
+on:
+  pull_request:
+  push:
+    branches: [main, "codex/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  repository:
+    runs-on: windows-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Verify source release
+        shell: pwsh
+        run: |
+          npm test
+          npm run verify
+          npm run release:metadata:check
+          npm --prefix packages/record-replay-windows ci --ignore-scripts
+          npm --prefix packages/record-replay-windows audit --omit=dev
+          npm --prefix packages/record-replay-windows test
+          cargo test --locked --manifest-path packages/record-replay-windows/native/recorder/Cargo.toml
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Scan current tree and history
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

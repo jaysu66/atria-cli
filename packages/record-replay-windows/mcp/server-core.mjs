@@ -12,6 +12,8 @@ import { z } from "zod";
 import { pluginPath } from "./plugin-path.mjs";
 import { defaultSessionRoot, NativeRecorderClient } from "./native-client.mjs";
 import { NativeActorClient } from "./actor-client.mjs";
+import { ActionCoordinator } from "./action-coordinator.mjs";
+import { VisualController } from "./visual-controller.mjs";
 import { executeReplay, planReplay, readJsonlFile } from "./replay-runner.mjs";
 import { analyzeWorkflow, installGeneratedSkill, readJsonl } from "./skill-generator.mjs";
 import { inlineWidget, readText, registerWidgetResource } from "./widget-resource.mjs";
@@ -21,8 +23,30 @@ const STATUS_PANEL_URI = "ui://widget/record-replay-windows-status-panel.html";
 const DEFAULT_PANEL_CONTROL_PORT = 47874;
 const PANEL_CONTROL_PORT_COUNT = 6;
 const MAX_EVENTS_FOR_SAMPLING = 60;
+const MAX_PARENT_OPERATIONS = 256;
 
-function asToolResult(result, { widget = false } = {}) {
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+  }
+  return value;
+}
+
+function requestFingerprint(tool, input = {}) {
+  const { operationId: _operationId, ...args } = input;
+  return crypto.createHash("sha256").update(JSON.stringify(canonical({ tool, args }))).digest("hex");
+}
+
+function operationError(code, message, operationId, status = "failed") {
+  const error = new Error(message);
+  error.code = code;
+  error.operationId = operationId;
+  error.status = status;
+  return error;
+}
+
+function asToolResult(result, { widget = false, isError = false } = {}) {
   return {
     content: [
       {
@@ -31,6 +55,7 @@ function asToolResult(result, { widget = false } = {}) {
       },
     ],
     structuredContent: result,
+    ...(isError ? { isError: true } : {}),
     ...(widget
       ? {
           _meta: {
@@ -578,7 +603,7 @@ export function createEventStreamServer(options = {}) {
   };
   const startRecording = async (input = {}) => remember(await recorder.start({
     maxDurationSeconds: input.maxDurationSeconds ?? 1800,
-    capturePolicy: input.capturePolicy ?? "key_events",
+    capturePolicy: input.capturePolicy ?? "off",
     installSkillOnStop: input.installSkillOnStop ?? true,
     redactText: input.redactText ?? true,
     excludeApps: input.excludeApps ?? [],
@@ -691,6 +716,199 @@ export function createEventStreamServer(options = {}) {
       : ensurePanelControlHelper(options)
     : null;
   const actor = options.actorClient || new NativeActorClient(options);
+  const visualController = options.visualController || new VisualController({
+    mode: options.visualMode,
+    overlayPath: options.overlayPath,
+    spawnRenderer: options.spawnRenderer,
+    readyTimeoutMs: options.visualReadyTimeoutMs,
+  });
+  const actionCoordinator = options.actionCoordinator || new ActionCoordinator(actor, {
+    lockPath: options.automationLockPath,
+    eventLogPath: options.actionEventLogPath,
+    maxEvents: options.maxActionEvents,
+    visual: visualController,
+  });
+  const serviceBootId = String(actionCoordinator.bootId);
+  const parentOperations = new Map();
+
+  function parentOperationStatus(operationId) {
+    const operation = parentOperations.get(operationId);
+    if (!operation) return null;
+    const currentActorBootId = String(actor.actorBootId || serviceBootId);
+    if (operation.serviceBootId !== serviceBootId) {
+      return {
+        operationId,
+        tool: operation.tool,
+        sessionId: operation.sessionId,
+        state: "unknown",
+        createdAt: new Date(operation.createdAt).toISOString(),
+        settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
+        result: null,
+        error: {
+          code: "BOOT_MISMATCH",
+          message: "The parent operation belongs to an expired service boot and cannot be retried.",
+          status: "unknown",
+        },
+      };
+    }
+    if (operation.actorBootId !== currentActorBootId) {
+      return {
+        operationId,
+        tool: operation.tool,
+        sessionId: operation.sessionId,
+        state: "unknown",
+        createdAt: new Date(operation.createdAt).toISOString(),
+        settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
+        result: null,
+        error: {
+          code: "BOOT_MISMATCH",
+          message: "The parent operation belongs to an expired actor boot and cannot be retried.",
+          status: "unknown",
+        },
+      };
+    }
+    return {
+      operationId,
+      tool: operation.tool,
+      sessionId: operation.sessionId,
+      state: operation.state,
+      createdAt: new Date(operation.createdAt).toISOString(),
+      settledAt: operation.settledAt ? new Date(operation.settledAt).toISOString() : null,
+      result: operation.result?.structuredContent || operation.result || null,
+      error: operation.error ? {
+        code: operation.error.code || "ACTION_FAILED",
+        message: operation.error.message,
+        status: operation.error.status || "failed",
+      } : null,
+    };
+  }
+
+  function runParentOperation(tool, input, sessionId, work) {
+    if (typeof actor.ensureStarted === "function") actor.ensureStarted();
+    const actorBootId = String(actor.actorBootId || serviceBootId);
+    const boundSessionId = String(sessionId || actionCoordinator.defaultSessionId);
+    const operationId = input.operationId || `${serviceBootId}:${crypto.randomUUID()}`;
+    if (input.operationId && !operationId.startsWith(`${serviceBootId}:`)) {
+      throw operationError(
+        "BOOT_MISMATCH",
+        "The parent operationId belongs to an expired service boot; it will not be re-executed.",
+        operationId,
+        "unknown",
+      );
+    }
+    const fingerprint = requestFingerprint(tool, input);
+    const existing = parentOperations.get(operationId);
+    if (existing) {
+      if (existing.serviceBootId !== serviceBootId) {
+        throw operationError(
+          "BOOT_MISMATCH",
+          "The parent operationId belongs to an expired service boot; it will not be re-executed.",
+          operationId,
+          "unknown",
+        );
+      }
+      if (existing.actorBootId !== actorBootId) {
+        throw operationError(
+          "BOOT_MISMATCH",
+          "The parent operationId belongs to an expired actor boot; it will not be re-executed.",
+          operationId,
+          "unknown",
+        );
+      }
+      if (existing.sessionId !== boundSessionId) {
+        throw operationError(
+          "SESSION_MISMATCH",
+          "The parent operationId is already bound to a different automation session.",
+          operationId,
+        );
+      }
+      if (existing.fingerprint !== fingerprint) {
+        throw operationError(
+          "IDEMPOTENCY_CONFLICT",
+          `The same parent operationId was reused with different ${tool} arguments.`,
+          operationId,
+        );
+      }
+      return { operationId, promise: existing.promise };
+    }
+    if (parentOperations.size >= MAX_PARENT_OPERATIONS) {
+      throw operationError(
+        "CAPACITY_REACHED",
+        "Parent operation capacity reached for this server boot; new work is refused to preserve idempotency.",
+        operationId,
+      );
+    }
+    const operation = {
+      tool,
+      serviceBootId,
+      actorBootId,
+      sessionId: boundSessionId,
+      fingerprint,
+      state: "running",
+      createdAt: Date.now(),
+      settledAt: null,
+      result: null,
+      error: null,
+      promise: null,
+    };
+    operation.promise = Promise.resolve()
+      .then(() => work(operationId))
+      .then((result) => {
+        operation.result = result;
+        operation.settledAt = Date.now();
+        const content = result?.structuredContent || result || {};
+        operation.state = content.status
+          || (content.completed === false ? "failed" : "succeeded");
+        return result;
+      }, (error) => {
+        operation.error = error;
+        operation.settledAt = Date.now();
+        operation.state = error?.status || "failed";
+        throw error;
+      });
+    parentOperations.set(operationId, operation);
+    return { operationId, promise: operation.promise };
+  }
+  visualController.setControlHandler(async (command) => {
+    if (command === "stop") return actionCoordinator.stop();
+    if (command === "toggle_pause") {
+      return actionCoordinator.controlState === "paused"
+        ? actionCoordinator.resume()
+        : actionCoordinator.pause();
+    }
+    return null;
+  });
+  const writeMethods = {
+    click: "click",
+    move: "mouseMove",
+    drag: "drag",
+    scroll: "scroll",
+    type: "typeText",
+    key: "key",
+    window_focus: "windowFocus",
+    invoke: "uiaInvoke",
+    set_value: "uiaInvoke",
+  };
+
+  async function runWrite(action, params = {}, context = {}) {
+    const method = writeMethods[action];
+    if (!method || typeof actor[method] !== "function") throw new Error(`Unsupported actor action: ${action}`);
+    return actionCoordinator.run(action, params, ({ operationId, sessionId, parentOperationId, stepIndex }) => actor[method]({
+      ...params,
+      operationId,
+      sessionId,
+      ...(parentOperationId ? { parentOperationId } : {}),
+      ...(Number.isInteger(stepIndex) ? { stepIndex } : {}),
+    }), context);
+  }
+
+  function actionContext(input = {}, extra = {}) {
+    return {
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.operationId ? { operationId: input.operationId } : {}),
+      ...extra,
+    };
+  }
   // ---- batch-M a11y-first 交互循环(学 Windows-MCP/orca) ----
   // lastState:最近一次 ui_snapshot(元素编号→坐标由引擎解析,模型不碰坐标);
   // 索引短命:UI 变化后旧编号作废,动作默认返回新状态供下一步使用。
@@ -721,18 +939,41 @@ export function createEventStreamServer(options = {}) {
   // elementIndex → 物理坐标(引擎解析,模型只挑编号)。
   function resolveTarget(input = {}) {
     if (Number.isInteger(input.elementIndex)) {
-      if (!lastState) throw new Error("No ui_snapshot yet — call ui_snapshot first, then use elementIndex from it.");
-      if (Number.isInteger(input.snapshotId) && input.snapshotId !== lastState.snapshotId) {
-        throw new Error(`Stale snapshotId ${input.snapshotId} (current ${lastState.snapshotId}) — element indexes go stale after UI changes; take a fresh ui_snapshot.`);
+      if (!lastState) throw operationError("SNAPSHOT_REQUIRED", "No ui_snapshot yet — call ui_snapshot first, then use elementIndex from it.");
+      if (!Number.isInteger(input.snapshotId)) {
+        throw operationError("SNAPSHOT_REQUIRED", `snapshotId is required with elementIndex (current ${lastState.snapshotId}) so stale indexes cannot click a changed UI.`);
+      }
+      if (input.snapshotId !== lastState.snapshotId) {
+        throw operationError("STALE_SNAPSHOT", `Stale snapshotId ${input.snapshotId} (current ${lastState.snapshotId}) — element indexes go stale after UI changes; take a fresh ui_snapshot.`);
       }
       const el = lastState.elements.find((e) => e.i === input.elementIndex);
-      if (!el) throw new Error(`elementIndex ${input.elementIndex} not in current snapshot (0..${lastState.elements.length - 1}) — take a fresh ui_snapshot.`);
-      return { x: el.cx, y: el.cy, element: el };
+      if (!el) throw operationError("INVALID_ELEMENT_INDEX", `elementIndex ${input.elementIndex} not in current snapshot (0..${lastState.elements.length - 1}) — take a fresh ui_snapshot.`);
+      return { x: el.cx, y: el.cy, element: el, window: lastState.window };
     }
     if (Number.isFinite(input.x) && Number.isFinite(input.y)) {
-      return { x: Math.round(input.x), y: Math.round(input.y), element: null };
+      return { x: Math.round(input.x), y: Math.round(input.y), element: null, window: lastState?.window || null };
     }
-    throw new Error("Pass elementIndex (from ui_snapshot) or x/y coordinates.");
+    throw operationError("INVALID_TARGET", "Pass elementIndex (from ui_snapshot) or x/y coordinates.");
+  }
+
+  function resolveScrollTarget(input = {}) {
+    if (!["elementIndex", "snapshotId", "x", "y"].some((key) => input[key] !== undefined)) return {};
+    const target = resolveTarget(input);
+    return { x: target.x, y: target.y, window: target.window };
+  }
+
+  function boundExpect(input = {}, target = null) {
+    const explicit = input.expect || {};
+    const window = target?.window || lastState?.window || null;
+    if (!window?.hwnd && !explicit.hwnd && !explicit.processName && !explicit.titleContains && !explicit.titleExact) {
+      throw new Error("TARGET_SCOPE_REQUIRED: take ui_snapshot first or pass expect; unscoped writes are refused.");
+    }
+    return {
+      ...explicit,
+      ...(window?.hwnd ? { hwnd: window.hwnd } : {}),
+      ...(window?.pid ? { pid: window.pid } : {}),
+      ...(window?.title ? { titleExact: window.title } : {}),
+    };
   }
 
   // 动作后回传新状态(文本,token 便宜,弱视觉模型可用)+ 截图文件路径(前端渲染用,不进模型上下文)。
@@ -758,9 +999,12 @@ export function createEventStreamServer(options = {}) {
 
   server.closeRecorder = () => {
     if (typeof recorder.close === "function") recorder.close();
+    actionCoordinator.close();
     if (typeof actor.close === "function") actor.close();
     panelControl?.close?.();
   };
+  server.actionCoordinator = actionCoordinator;
+  server.visualController = visualController;
 
   registerStatusPanelResource(server, { panelControl });
 
@@ -769,7 +1013,7 @@ export function createEventStreamServer(options = {}) {
     "event_stream_start",
     {
       title: "Start Event Stream Recording",
-      description: "Start recording a Windows desktop workflow. All parameters are optional and a status panel is rendered.",
+      description: "Start recording a Windows desktop workflow. Screenshots default to off. capturePolicy=key_events requires redactText=false and may persist visible screen content. All parameters are optional and a status panel is rendered.",
       inputSchema: {
         maxDurationSeconds: z.number().int().positive().max(7200).optional(),
         capturePolicy: z.enum(["key_events", "off"]).optional(),
@@ -861,6 +1105,9 @@ export function createEventStreamServer(options = {}) {
     .object({
       processName: z.string().optional(),
       titleContains: z.string().optional(),
+      titleExact: z.string().optional(),
+      hwnd: z.number().int().optional(),
+      pid: z.number().int().positive().optional(),
     })
     .optional()
     .describe("焦点硬校验:前台窗口不匹配则拒绝执行(FOCUS_MISMATCH)");
@@ -869,6 +1116,7 @@ export function createEventStreamServer(options = {}) {
     automationId: z.string().optional(),
     className: z.string().optional(),
     controlType: z.string().optional().describe("如 button/edit/document/menuitem"),
+    nameMatch: z.enum(["contains", "exact"]).optional().describe("name defaults to contains; use exact to reject similar labels"),
     scopeHwnd: z.number().int().optional(),
     scopeTitle: z.string().optional().describe("按窗口标题限定查找范围"),
     timeoutMs: z.number().int().positive().max(20000).optional(),
@@ -900,13 +1148,17 @@ export function createEventStreamServer(options = {}) {
 
   const targetShape = {
     elementIndex: z.number().int().optional().describe("Element index from the latest ui_snapshot (preferred — engine resolves coordinates)"),
-    snapshotId: z.number().int().optional().describe("Optional staleness guard: snapshotId the index came from"),
+    snapshotId: z.number().int().optional().describe("Required with elementIndex: snapshotId the index came from"),
     x: z.number().int().optional(),
     y: z.number().int().optional(),
   };
   const feedbackShape = {
     returnState: z.boolean().optional().describe("Default true: response includes a fresh ui_snapshot for the next step"),
     returnScreenshotPath: z.boolean().optional(),
+  };
+  const operationShape = {
+    operationId: z.string().min(3).max(200).optional().describe("Stable id returned by a prior attempt; reuse only with identical arguments"),
+    sessionId: z.string().min(1).max(120).optional(),
   };
 
   server.registerTool(
@@ -920,11 +1172,12 @@ export function createEventStreamServer(options = {}) {
         clicks: z.number().int().min(1).max(3).optional().describe("1=single 2=double 3=triple"),
         expect: expectShape,
         ...feedbackShape,
+        ...operationShape,
       },
     },
     async (input = {}) => {
       const target = resolveTarget(input);
-      const result = await actor.click({ x: target.x, y: target.y, button: input.button, clicks: input.clicks, expect: input.expect });
+      const result = await runWrite("click", { x: target.x, y: target.y, button: input.button, clicks: input.clicks, expect: boundExpect(input, target) }, actionContext(input));
       return asToolResult({ ...result, targetElement: target.element || undefined, ...(await afterAction(input)) });
     },
   );
@@ -933,11 +1186,11 @@ export function createEventStreamServer(options = {}) {
     "computer_move",
     {
       description: "Move the mouse smoothly to an element or coordinates (visible glide, no click).",
-      inputSchema: { ...targetShape, durationMs: z.number().int().min(0).max(2000).optional() },
+      inputSchema: { ...targetShape, durationMs: z.number().int().min(0).max(2000).optional(), ...operationShape },
     },
     async (input = {}) => {
       const target = resolveTarget(input);
-      return asToolResult(await actor.mouseMove({ x: target.x, y: target.y, durationMs: input.durationMs }));
+      return asToolResult(await runWrite("move", { x: target.x, y: target.y, durationMs: input.durationMs, expect: boundExpect(input, target) }, actionContext(input)));
     },
   );
 
@@ -947,6 +1200,7 @@ export function createEventStreamServer(options = {}) {
       description: "Drag from one point/element to another (smooth, real drag events). Response includes fresh UI state.",
       inputSchema: {
         fromElementIndex: z.number().int().optional(),
+        snapshotId: z.number().int().optional().describe("Required when either endpoint uses an element index; both endpoints use this snapshot"),
         fromX: z.number().int().optional(),
         fromY: z.number().int().optional(),
         toElementIndex: z.number().int().optional(),
@@ -956,12 +1210,13 @@ export function createEventStreamServer(options = {}) {
         durationMs: z.number().int().min(100).max(3000).optional(),
         expect: expectShape,
         ...feedbackShape,
+        ...operationShape,
       },
     },
     async (input = {}) => {
       const from = resolveTarget({ elementIndex: input.fromElementIndex, x: input.fromX, y: input.fromY, snapshotId: input.snapshotId });
       const to = resolveTarget({ elementIndex: input.toElementIndex, x: input.toX, y: input.toY, snapshotId: input.snapshotId });
-      const result = await actor.drag({ fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, button: input.button, durationMs: input.durationMs, expect: input.expect });
+      const result = await runWrite("drag", { fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, button: input.button, durationMs: input.durationMs, expect: boundExpect(input, from) }, actionContext(input));
       return asToolResult({ ...result, ...(await afterAction(input)) });
     },
   );
@@ -976,12 +1231,17 @@ export function createEventStreamServer(options = {}) {
         amount: z.number().int().min(1).max(20).optional().describe("wheel notches, default 3"),
         expect: expectShape,
         ...feedbackShape,
+        ...operationShape,
       },
     },
     async (input = {}) => {
-      let at = {};
-      try { const t = resolveTarget(input); at = { x: t.x, y: t.y }; } catch (_) { /* 无目标=当前位置 */ }
-      const result = await actor.scroll({ ...at, direction: input.direction, amount: input.amount, expect: input.expect });
+      let at;
+      try {
+        at = resolveScrollTarget(input);
+      } catch (error) {
+        return asToolResult({ status: "failed", code: error.code || "INVALID_TARGET", message: error.message }, { isError: true });
+      }
+      const result = await runWrite("scroll", { ...at, direction: input.direction, amount: input.amount, expect: boundExpect(input, at.window ? at : null) }, actionContext(input));
       return asToolResult({ ...result, ...(await afterAction(input)) });
     },
   );
@@ -998,15 +1258,36 @@ export function createEventStreamServer(options = {}) {
         clearFirst: z.boolean().optional(),
         expect: expectShape,
         ...feedbackShape,
+        ...operationShape,
       },
     },
     async (input = {}) => {
       if (Number.isInteger(input.elementIndex)) {
-        const target = resolveTarget(input);
-        await actor.click({ x: target.x, y: target.y, expect: input.expect });
-        await new Promise((r) => setTimeout(r, 120));
+        const sessionId = input.sessionId;
+        const parent = runParentOperation("computer_type_composite", input, sessionId, async (parentOperationId) => {
+          const target = resolveTarget(input);
+          const result = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async (heldContext) => {
+            await runWrite("click", { x: target.x, y: target.y, expect: boundExpect(input, target) }, {
+              lockHeld: true,
+              leaseState: heldContext.leaseState,
+              parentOperationId,
+              stepIndex: 0,
+              sessionId,
+            });
+            await new Promise((r) => setTimeout(r, 120));
+            return runWrite("type", { text: input.text, clearFirst: input.clearFirst, expect: boundExpect(input) }, {
+              lockHeld: true,
+              leaseState: heldContext.leaseState,
+              parentOperationId,
+              stepIndex: 1,
+              sessionId,
+            });
+          });
+          return asToolResult({ ...result, parentOperationId, ...(await afterAction(input)) });
+        });
+        return parent.promise;
       }
-      const result = await actor.typeText({ text: input.text, clearFirst: input.clearFirst, expect: input.expect });
+      const result = await runWrite("type", { text: input.text, clearFirst: input.clearFirst, expect: boundExpect(input) }, actionContext(input));
       return asToolResult({ ...result, ...(await afterAction(input)) });
     },
   );
@@ -1024,6 +1305,7 @@ export function createEventStreamServer(options = {}) {
         scopeTitle: z.string().optional(),
         value: z.string(),
         ...feedbackShape,
+        ...operationShape,
       },
     },
     async (input = {}) => {
@@ -1033,11 +1315,12 @@ export function createEventStreamServer(options = {}) {
         locator = {
           name: target.element?.name || undefined,
           automationId: target.element?.automationId || undefined,
-          scopeTitle: lastState?.window?.title || undefined,
+          scopeHwnd: target.window?.hwnd || undefined,
+          nameMatch: target.element?.automationId ? undefined : "exact",
         };
       }
-      const result = await actor.uiaInvoke({ ...locator, action: "set_value", value: input.value, timeoutMs: 3000 });
-      return asToolResult({ ...result, ...(await afterAction(input)) });
+      const result = await runWrite("set_value", { ...locator, action: "set_value", value: input.value, timeoutMs: 3000 }, actionContext(input));
+      return asToolResult({ ...result, ...(await afterAction(input)) }, { isError: result?.status === "failed" });
     },
   );
 
@@ -1092,45 +1375,71 @@ export function createEventStreamServer(options = {}) {
           direction: z.enum(["up", "down", "left", "right"]).optional(),
           amount: z.number().int().optional(),
           ms: z.number().int().min(50).max(10000).optional(),
-        })).min(1).max(12),
+        })).min(1).max(50),
+        snapshotId: z.number().int().optional().describe("Required for element-index steps; one snapshot taken before the batch binds all such steps"),
         expect: expectShape,
         ...feedbackShape,
+        ...operationShape,
       },
     },
     async (input = {}) => {
-      const results = [];
-      for (const [idx, step] of (input.actions || []).entries()) {
-        try {
-          if (step.action === "wait") {
-            await new Promise((r) => setTimeout(r, step.ms || 500));
-            results.push({ idx, action: "wait", ok: true });
-          } else if (step.action === "click") {
-            const t = resolveTarget(step);
-            await actor.click({ x: t.x, y: t.y, button: step.button, clicks: step.clicks, expect: input.expect });
-            results.push({ idx, action: "click", ok: true, at: { x: t.x, y: t.y } });
-          } else if (step.action === "move") {
-            const t = resolveTarget(step);
-            await actor.mouseMove({ x: t.x, y: t.y });
-            results.push({ idx, action: "move", ok: true });
-          } else if (step.action === "type") {
-            await actor.typeText({ text: step.text || "", clearFirst: step.clearFirst, expect: input.expect });
-            results.push({ idx, action: "type", ok: true });
-          } else if (step.action === "key") {
-            await actor.key({ keys: step.keys || "", expect: input.expect });
-            results.push({ idx, action: "key", ok: true });
-          } else if (step.action === "scroll") {
-            let at = {};
-            try { const t = resolveTarget(step); at = { x: t.x, y: t.y }; } catch (_) {}
-            await actor.scroll({ ...at, direction: step.direction, amount: step.amount, expect: input.expect });
-            results.push({ idx, action: "scroll", ok: true });
+      const sessionId = input.sessionId;
+      const parent = runParentOperation("computer_batch", input, sessionId, async (parentOperationId) => {
+        const results = [];
+        const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, async (heldContext) => {
+          for (const [idx, step] of (input.actions || []).entries()) {
+            try {
+              await actionCoordinator.waitUntilRunnable(heldContext.leaseState.stopGeneration);
+              const context = { lockHeld: true, leaseState: heldContext.leaseState, parentOperationId, stepIndex: idx, sessionId };
+              if (step.action === "wait") {
+                await new Promise((r) => setTimeout(r, step.ms || 500));
+                results.push({ idx, action: "wait", ok: true });
+              } else if (step.action === "click") {
+                const t = resolveTarget({ ...step, snapshotId: input.snapshotId });
+                const actionResult = await runWrite("click", { x: t.x, y: t.y, button: step.button, clicks: step.clicks, expect: boundExpect(input, t) }, context);
+                results.push({ idx, action: "click", ok: true, operationId: actionResult.operationId, at: { x: t.x, y: t.y } });
+              } else if (step.action === "move") {
+                const t = resolveTarget({ ...step, snapshotId: input.snapshotId });
+                const actionResult = await runWrite("move", { x: t.x, y: t.y, expect: boundExpect(input, t) }, context);
+                results.push({ idx, action: "move", ok: true, operationId: actionResult.operationId });
+              } else if (step.action === "type") {
+                const actionResult = await runWrite("type", { text: step.text || "", clearFirst: step.clearFirst, expect: boundExpect(input) }, context);
+                results.push({ idx, action: "type", ok: true, operationId: actionResult.operationId });
+              } else if (step.action === "key") {
+                const actionResult = await runWrite("key", { keys: step.keys || "", expect: boundExpect(input) }, context);
+                results.push({ idx, action: "key", ok: true, operationId: actionResult.operationId });
+              } else if (step.action === "scroll") {
+                const at = resolveScrollTarget({ ...step, ...(step.elementIndex !== undefined ? { snapshotId: input.snapshotId } : {}) });
+                const actionResult = await runWrite("scroll", { x: at.x, y: at.y, direction: step.direction, amount: step.amount, expect: boundExpect(input, at.window ? at : null) }, context);
+                results.push({ idx, action: "scroll", ok: true, operationId: actionResult.operationId });
+              }
+              await new Promise((r) => setTimeout(r, 120));
+            } catch (error) {
+              const code = error.code || "ACTION_FAILED";
+              const status = error.status === "unknown" || ["EXECUTION_TIMEOUT", "EXECUTION_UNKNOWN", "ACTOR_EXITED", "ACTOR_CLOSING"].includes(code)
+                ? "unknown"
+                : error.status === "cancelled" || ["ACTION_STOPPED", "ACTION_PAUSED", "REQUEST_EXPIRED"].includes(code)
+                  ? "cancelled"
+                  : "failed";
+              results.push({
+                idx,
+                action: step.action,
+                ok: false,
+                status,
+                code,
+                ...(error.operationId ? { operationId: error.operationId } : {}),
+              });
+              return { completed: false, stoppedAt: idx, results };
+            }
           }
-          await new Promise((r) => setTimeout(r, 120));
-        } catch (error) {
-          results.push({ idx, action: step.action, ok: false, error: error.message });
-          return asToolResult({ completed: false, stoppedAt: idx, results, ...(await afterAction(input)) });
-        }
-      }
-      return asToolResult({ completed: true, results, ...(await afterAction(input)) });
+          return { completed: true, results };
+        });
+        const status = outcome.completed
+          ? "succeeded"
+          : outcome.results.at(-1)?.status || (outcome.results.at(-1)?.code === "ACTION_STOPPED" ? "cancelled" : "failed");
+        return asToolResult({ ...outcome, status, operationId: parentOperationId, ...(await afterAction(input)) }, { isError: !outcome.completed });
+      });
+      return parent.promise;
     },
   );
 
@@ -1139,9 +1448,9 @@ export function createEventStreamServer(options = {}) {
     {
       description:
         "Press a key or combo, e.g. \"enter\", \"ctrl+s\", \"alt+f4\". Pass expect to hard-verify the foreground window first.",
-      inputSchema: { keys: z.string(), expect: expectShape },
+      inputSchema: { keys: z.string(), expect: expectShape, ...operationShape },
     },
-    async (input = {}) => asToolResult(await actor.key(input)),
+    async (input = {}) => asToolResult(await runWrite("key", { keys: input.keys, expect: boundExpect(input) }, actionContext(input))),
   );
 
   server.registerTool(
@@ -1162,9 +1471,14 @@ export function createEventStreamServer(options = {}) {
         hwnd: z.number().int().optional(),
         title: z.string().optional(),
         processName: z.string().optional(),
+        ...operationShape,
       },
     },
-    async (input = {}) => asToolResult(await actor.windowFocus(input)),
+    async (input = {}) => asToolResult(await runWrite("window_focus", {
+      hwnd: input.hwnd,
+      title: input.title,
+      processName: input.processName,
+    }, actionContext(input))),
   );
 
   server.registerTool(
@@ -1186,9 +1500,99 @@ export function createEventStreamServer(options = {}) {
         ...locatorShape,
         action: z.enum(["invoke", "click", "focus", "set_value"]).optional(),
         value: z.string().optional(),
+        ...operationShape,
       },
     },
-    async (input = {}) => asToolResult(await actor.uiaInvoke(input)),
+    async (input = {}) => {
+      const action = input.action === "set_value" ? "set_value" : "invoke";
+      const { operationId: _operationId, sessionId: _sessionId, ...params } = input;
+      const result = await runWrite(action, params, actionContext(input));
+      return asToolResult(result, { isError: result?.status === "failed" });
+    },
+  );
+
+  server.registerTool(
+    "automation_status",
+    {
+      description: "Read the local Windows automation state, write-session owner, last action event, and an optional native operation result.",
+      inputSchema: {
+        operationId: z.string().optional(),
+      },
+    },
+    async (input = {}) => asToolResult({
+      ...actionCoordinator.status(),
+      operation: input.operationId
+        ? parentOperationStatus(input.operationId)
+          || (typeof actor.operationStatus === "function" ? actor.operationStatus(input.operationId) : null)
+        : null,
+    }),
+  );
+
+  server.registerTool(
+    "automation_pause",
+    {
+      description: "Pause the active interruptible Windows action through an out-of-band control file. Returns whether native acknowledged within 500ms.",
+      inputSchema: {},
+    },
+    async () => asToolResult(await actionCoordinator.pause()),
+  );
+
+  server.registerTool(
+    "automation_resume",
+    {
+      description: "Resume a paused local Windows action.",
+      inputSchema: {},
+    },
+    async () => asToolResult(await actionCoordinator.resume()),
+  );
+
+  server.registerTool(
+    "automation_stop",
+    {
+      description: "Stop the active local Windows action and prevent later batch or replay steps from starting.",
+      inputSchema: {},
+    },
+    async () => asToolResult(await actionCoordinator.stop()),
+  );
+
+  server.registerTool(
+    "action_events_recent",
+    {
+      description: "Return recent sanitized action lifecycle events. Text bodies, clipboard data, cookies, keys, and full window titles are excluded.",
+      inputSchema: { limit: z.number().int().min(1).max(1000).optional() },
+    },
+    async (input = {}) => asToolResult({ events: actionCoordinator.recentEvents(input.limit) }),
+  );
+
+  server.registerTool(
+    "visual_status",
+    {
+      description: "Read the independent Windows visual renderer mode, readiness, process identity and last measured frame acknowledgement.",
+      inputSchema: {},
+    },
+    async () => asToolResult(visualController.status()),
+  );
+
+  server.registerTool(
+    "visual_enable",
+    {
+      description: "Enable the local action overlay. required=true blocks the next write unless renderer-ready is confirmed.",
+      inputSchema: { required: z.boolean().optional() },
+    },
+    async (input = {}) => {
+      visualController.setMode(input.required ? "required" : "on");
+      const readiness = await visualController.beforeAction();
+      return asToolResult({ ...visualController.status(), readiness }, { isError: input.required && !readiness.ready });
+    },
+  );
+
+  server.registerTool(
+    "visual_disable",
+    {
+      description: "Disable and stop the local action overlay. Automation remains available without visualization.",
+      inputSchema: {},
+    },
+    async () => asToolResult(visualController.setMode("off")),
   );
 
   server.registerTool(
@@ -1203,6 +1607,7 @@ export function createEventStreamServer(options = {}) {
         stepDelayMs: z.number().int().min(0).max(5000).optional(),
         stopOnFailure: z.boolean().optional(),
         captureDir: z.string().optional().describe("If set, save a keyframe PNG after each executed step (audit trail)"),
+        ...operationShape,
       },
     },
     async (input = {}) => {
@@ -1214,10 +1619,53 @@ export function createEventStreamServer(options = {}) {
       const suppressed = readJsonlFile(session.suppressedEventsPath);
       const plan = planReplay(events, suppressed);
       if (input.dryRun) {
-        return asToolResult({ sessionID: session.sessionID, dryRun: true, planLength: plan.length, plan });
+        const needsAgentCount = plan.filter((step) => step.kind === "needs_agent").length;
+        const skippedCount = plan.filter((step) => step.kind === "skip").length;
+        return asToolResult({
+          sessionID: session.sessionID,
+          dryRun: true,
+          status: needsAgentCount > 0 ? "needs_agent" : skippedCount > 0 ? "partial" : "ready",
+          planLength: plan.length,
+          startIndex: Math.max(0, Number(input.startIndex || 0)),
+          needsAgentCount,
+          skippedCount,
+          plan,
+        });
       }
-      const outcome = await executeReplay(actor, plan, input);
-      return asToolResult({ sessionID: session.sessionID, planLength: plan.length, ...outcome });
+      const sessionId = input.sessionId || session.sessionID;
+      const parent = runParentOperation("replay_run", input, sessionId, async (parentOperationId) => {
+        const replayActor = {
+          uiaFind: (params) => actor.uiaFind(params),
+          screenshot: (params) => actor.screenshot(params),
+        };
+        let heldLeaseState = null;
+        for (const [method, action] of [
+          ["windowFocus", "window_focus"],
+          ["click", "click"],
+          ["key", "key"],
+          ["typeText", "type"],
+          ["scroll", "scroll"],
+        ]) {
+          replayActor[method] = (params = {}) => {
+            const { _actionStepIndex, ...cleanParams } = params;
+            return runWrite(action, cleanParams, {
+              lockHeld: true,
+              leaseState: heldLeaseState,
+              parentOperationId,
+              stepIndex: Number.isInteger(_actionStepIndex) ? _actionStepIndex : undefined,
+              sessionId,
+            });
+          };
+        }
+        const outcome = await actionCoordinator.withWriteSession({ operationId: parentOperationId, sessionId }, (heldContext) => {
+          heldLeaseState = heldContext.leaseState;
+          return executeReplay(replayActor, plan, input);
+        });
+        const result = { sessionID: session.sessionID, planLength: plan.length, operationId: parentOperationId, ...outcome };
+        const isError = ["failed", "partial", "unknown", "cancelled"].includes(outcome.status);
+        return asToolResult(result, { isError });
+      });
+      return parent.promise;
     },
   );
 

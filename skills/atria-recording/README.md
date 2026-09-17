@@ -1,50 +1,29 @@
 # Atria Recording Skill
 
-这是“录什么、用哪个引擎”的路由 Skill。用户说“我做一遍，以后帮我照做”时，它先确定录制方式，再调用真正的引擎，避免用户演示完才发现内容没有被捕获。执行规则见 [SKILL.md](SKILL.md)。
+This routing Skill chooses the correct capture engine before a user demonstrates a workflow. Desktop/browser clicks use the Windows recorder; page API traffic uses Browser Bridge network capture.
 
-## 能力与选择
+## Input and output
 
-| 希望记录什么 | 使用什么 |
-| --- | --- |
-| Windows 原生软件中的点击、输入 | [Atria Desktop](../atria-desktop/README.md) 的桌面录制器 |
-| Chrome 中的点击、输入 | 同样使用 Windows 桌面录制器 |
-| 跨应用与浏览器的完整操作 | 桌面录制器，范围为整个屏幕 |
-| 页面网络请求、XHR/fetch 响应 | [Browser Bridge](../atria-browser-bridge/README.md) 的网络捕获 |
+- Input: what the user wants to capture, excluded applications, and a semantic workflow name/summary.
+- Output: a local recording session, redacted event evidence, and optionally a generated Skill for deterministic replay.
+- Network capture output is request metadata/body evidence from the selected tab; stopping capture discards its buffer.
 
-Browser Bridge 可以控制浏览器，但本包不含浏览器原生的用户点击录制工具；网络捕获不能代替用户动作录制。
+## Requirements and install
 
-## 输入与输出
+Install from the kit root with `install.ps1`. Desktop recording requires Windows 11, Node.js 18+, `record-replay-windows`, `recorder.exe`, and `actor.exe`. Network capture requires the matching Browser Bridge and paired extension.
 
-输入是要学习的工作流、用户演示及完成信号，或目标页面和接口问题。桌面路线输出录制会话、语义化 Skill 和回放结果；网络路线输出请求列表与响应内容，不自动生成完整可回放工作流。
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -BrowserDir C:\path\to\browser-bridge -DesktopDir C:\path\to\record-replay-windows
+```
 
-## 安装与依赖
+## Example and experience
 
-本 Skill 只有路由说明，无独立脚本或服务器。可以单独复制完整目录到 Agent 的 Skill 根目录，但使用前还需按上表安装对应能力和引擎。
+For a desktop demonstration: start `event_stream_start` with the default `capturePolicy:off`, tell the user recording is live, wait for completion, then call `event_stream_stop`. Generate a Skill only after reviewing the semantic summary. Always run `replay_run` with `dryRun:true` before a real replay.
 
-- 录制点击/输入需要 Windows、Node.js 和已构建的 Record/Replay Windows。
-- 网络捕获需要 Node.js、Browser Bridge 和已连接的 Chrome 扩展。
-- CLI 的 `recording` 命令只是桌面 MCP 服务入口，不是已经实现的 `recording start/stop` 子命令。
+Use `automation_pause`, `automation_resume`, or `automation_stop` for replay control. The optional standalone overlay visualizes execution; `event_stream_panel` is a different host-only recording widget. Neither replaces verification of the target application's state.
 
-## 可以这样使用
+## Privacy, update, rollback
 
-- “我演示一次从测试软件导出文件，录完生成 Skill。开始前告诉我录制范围。”
-- “把我在 Chrome 中操作测试表单的过程录下来，先不要回放。”
-- “捕获这个页面加载列表时的接口响应，只读取数据，不修改记录。”
+The desktop recorder sees the whole screen. Close private applications and pass `excludeApps`. Secrets are masked and become `needsAgent`; they are never embedded into generated Skills. Key-event screenshots are off by default. Enabling them requires `capturePolicy:key_events` together with `redactText:false`, which can persist visible private content and is intended only for an isolated fixture. Update the routing Skill, desktop engine, Browser Bridge, and manifests as compatible versioned components. Roll back all matching components together while preserving user recordings, pairing tokens, and configuration outside the package.
 
-桌面路线是选择引擎 → 提示隐私范围 → 开始 → 用户演示 → 明确停止 → 语义整理 → dry-run → 经确认回放。录制开始后 Agent 应等待用户，不用高频轮询打断演示。
-
-## 限制与安全
-
-- 桌面录制会观察整个屏幕，不仅一个应用。先关闭密码管理器、私人聊天和其他客户资料，并排除 Agent 自身窗口。
-- 说明何时开始、如何结束，避免把结束录制的操作当作工作流步骤。
-- 被遮蔽的密码或令牌无法自动回放；需要用户在回放时自行输入。不能把脱敏当作完整隐私保证。
-- 录制生成文件可能含控件文本、截图和业务数据，不要直接上传仓库。
-- 网络捕获内容可能包含 Cookie、请求头、令牌或响应中的私人数据，必须检查后再分享。
-- `network_stop` 会清空捕获缓冲区，先读取需要的请求与响应，再停止。
-- 不停止正在录制的桌面 daemon；回放必须先 dry-run，涉及提交、支付、删除或发送时重新确认。
-
-## 许可、来源与更新
-
-此路由来自 dsh 封装层，许可仍待确认；各引擎也有独立许可状态，参见 [LICENSE-STATUS.md](../../LICENSE-STATUS.md)。它不授予对网站、软件或他人数据的操作权限。
-
-随对应引擎更新此路由说明，保留用户自己生成的工作流。底层录制会话管理说明见 [record-replay-windows](../record-replay-windows/README.md)。
+Tested: Windows 11 and the local desktop/network capture routes. Limits: no browser-native click recorder, no guarantee that every host renders the MCP widget, and no completed clean-VM or full display-matrix acceptance. Native redistribution licensing remains under review; keep this candidate private.

@@ -1,14 +1,19 @@
 ﻿const DEFAULT_BRIDGE_PORT = 47652;
 const BRIDGE_PORT_KEY = "atriaBridgePort";
+const BRIDGE_TOKEN_KEY = "atriaBridgeToken";
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const AGENT_GROUP_TITLE = "Atria Agent";
 // Must match PROTOCOL_VERSION in mcp-server.js. Reported on every poll so the
 // server can tell the user "reload the extension" instead of leaving a stale
 // extension to fail in confusing ways.
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const AGENT_GROUP_COLOR = "green";
 
 let clientIdPromise = null;
+const extensionSessionId = `session_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+const extensionBootId = `browser_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+let browserVisualSequence = 0;
+let browserVisualStatus = { available: null, reason: "not-yet-rendered", updatedAt: null };
 let nativePort = null;
 let nativeConnected = false;
 let polling = false;
@@ -36,11 +41,24 @@ async function bridgeBase(protocol = "http") {
   return `${protocol}://127.0.0.1:${port}`;
 }
 
+async function getBridgeToken() {
+  const stored = await chrome.storage.local.get(BRIDGE_TOKEN_KEY);
+  const token = String(stored[BRIDGE_TOKEN_KEY] || "").trim();
+  return /^[A-Za-z0-9_-]{32,}$/.test(token) ? token : "";
+}
+
+function identityQuery(clientId) {
+  return `clientId=${encodeURIComponent(clientId)}&version=${encodeURIComponent(EXTENSION_VERSION)}&protocol=${PROTOCOL_VERSION}&sessionId=${encodeURIComponent(extensionSessionId)}`;
+}
+
 async function isBridgeReachable() {
   try {
     const base = await bridgeBase("http");
-    const response = await fetch(`${base}/health`, { cache: "no-store" });
-    return response.ok;
+    const token = await getBridgeToken();
+    if (!token) return false;
+    const response = await fetch(`${base}/health`, { cache: "no-store", headers: { "X-Atria-Token": token } });
+    const health = await response.json().catch(() => ({}));
+    return response.ok && health.authentication === "paired";
   } catch (_) {
     return false;
   }
@@ -57,6 +75,30 @@ function toolError(message, extra) {
   };
 }
 
+// BEGIN_TESTABLE_VISUAL_COMPLETION
+function readToolResultPayload(result) {
+  if (!result || !Array.isArray(result.content)) return null;
+  for (const item of result.content) {
+    if (item?.type !== "text" || typeof item.text !== "string") continue;
+    try {
+      const payload = JSON.parse(item.text);
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) return payload;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function resolveVisualCompletionPhase(result, lastPhase) {
+  if (result?.isError) return lastPhase === "failed" ? null : "failed";
+  const payload = readToolResultPayload(result);
+  if (payload?.verified === true) return lastPhase === "verified" ? null : "verified";
+  // Dispatch is a fact; success of the page-side outcome is not. The action
+  // already emitted input_dispatched at the actual CDP boundary, so ordinary
+  // click/key/scroll calls must neither duplicate it nor upgrade it to verified.
+  return null;
+}
+// END_TESTABLE_VISUAL_COMPLETION
+
 async function getClientId() {
   if (clientIdPromise) return clientIdPromise;
   clientIdPromise = (async () => {
@@ -71,13 +113,42 @@ async function getClientId() {
 
 async function postJson(path, body) {
   const base = await bridgeBase("http");
+  const token = await getBridgeToken();
+  if (!token) throw new Error("Browser bridge is not paired. Paste the local pairing token in the extension popup.");
   const response = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Atria-Token": token },
     body: JSON.stringify(body)
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json().catch(() => ({}));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`${data.code || `HTTP ${response.status}`}: ${data.error || "bridge request failed"}`);
+  return data;
+}
+
+function attachVisualMetadata(result, visual) {
+  if (!result || !Array.isArray(result.content)) return result;
+  const metadata = {
+    available: visual.available,
+    tabId: visual.tabId,
+    operationId: visual.operationId,
+    renderedAt: visual.renderedAt || null,
+    coordinatesRendered: Boolean(visual.coordinatesRendered),
+    active: visual.active,
+    ...(visual.reason ? { reason: visual.reason } : {})
+  };
+  const block = result.content.find((item) => item.type === "text");
+  if (block) {
+    try {
+      const parsed = JSON.parse(block.text);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        parsed.visual = metadata;
+        block.text = JSON.stringify(parsed, null, 2);
+        return result;
+      }
+    } catch (_) {}
+  }
+  result.content.push({ type: "text", text: JSON.stringify({ visual: metadata }) });
+  return result;
 }
 
 function scheduleSocketReconnect(delayMs = 2500) {
@@ -96,8 +167,13 @@ async function connectSocket() {
       return;
     }
     const clientId = await getClientId();
+    const token = await getBridgeToken();
+    if (!token) {
+      scheduleSocketReconnect(5000);
+      return;
+    }
     const base = await bridgeBase("ws");
-    const socket = new WebSocket(`${base}/extension/socket?clientId=${encodeURIComponent(clientId)}&version=${encodeURIComponent(EXTENSION_VERSION)}&protocol=${PROTOCOL_VERSION}`);
+    const socket = new WebSocket(`${base}/extension/socket?${identityQuery(clientId)}`, ["atria-v3", `atria-token.${token}`]);
     bridgeSocket = socket;
 
     socket.onopen = () => {
@@ -263,15 +339,6 @@ async function ensureContentScript(tabId) {
 async function sendToContent(tabId, message) {
   await ensureContentScript(tabId);
   return chrome.tabs.sendMessage(tabId, message);
-}
-
-async function setIndicator(tabId, visible) {
-  try {
-    await ensureContentScript(tabId);
-    await chrome.tabs.sendMessage(tabId, { type: "atria.indicator", visible });
-  } catch (_) {
-    // Best effort only. Some pages such as chrome:// cannot receive scripts.
-  }
 }
 
 async function withDebugger(tabId, fn) {
@@ -612,85 +679,6 @@ function withTimeout(promise, timeoutMs, label) {
     timer = setTimeout(() => reject(new Error(label)), timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function escapeXml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function base64Utf8(value) {
-  const bytes = new TextEncoder().encode(value);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function buildSvgSnapshot(snapshot, reason) {
-  const width = Math.max(320, Math.min(Number(snapshot?.width) || 1280, 2400));
-  const height = Math.max(240, Math.min(Number(snapshot?.height) || 800, 1800));
-  const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
-  const lines = [];
-  lines.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`);
-  lines.push(`<rect width="100%" height="100%" fill="${escapeXml(snapshot?.background || "#ffffff")}"/>`);
-  lines.push(`<text x="18" y="28" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#1f2937">${escapeXml(snapshot?.title || "Browser snapshot")}</text>`);
-  lines.push(`<text x="18" y="50" font-family="Arial, sans-serif" font-size="11" fill="#6b7280">${escapeXml(snapshot?.url || "")}</text>`);
-  if (reason) lines.push(`<text x="18" y="70" font-family="Arial, sans-serif" font-size="10" fill="#9ca3af">fallback: ${escapeXml(reason)}</text>`);
-  for (const item of items.slice(0, 120)) {
-    const x = Math.max(0, Math.round(Number(item.x) || 0));
-    const y = Math.max(80, Math.round(Number(item.y) || 0));
-    const w = Math.max(20, Math.round(Number(item.width) || 120));
-    const h = Math.max(16, Math.round(Number(item.height) || 24));
-    const label = escapeXml(String(item.text || "").slice(0, 140));
-    const stroke = item.interactive ? "#2563eb" : "#d1d5db";
-    const fill = item.interactive ? "#eff6ff" : "rgba(255,255,255,0.78)";
-    lines.push(`<rect x="${x}" y="${y}" width="${Math.min(w, width - x)}" height="${Math.min(h, height - y)}" rx="4" fill="${fill}" stroke="${stroke}" stroke-width="1"/>`);
-    if (label) {
-      const fontSize = Math.max(10, Math.min(15, h - 6));
-      lines.push(`<text x="${x + 6}" y="${y + Math.min(h - 5, fontSize + 5)}" font-family="Arial, sans-serif" font-size="${fontSize}" fill="#111827">${label}</text>`);
-    }
-  }
-  lines.push("</svg>");
-  return lines.join("");
-}
-
-async function captureDomSnapshot(tab, reason) {
-  const injection = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: () => {
-      const width = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-      const height = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
-      const background = getComputedStyle(document.body || document.documentElement).backgroundColor || "#ffffff";
-      const candidates = Array.from(document.body?.querySelectorAll("h1,h2,h3,p,a,button,input,select,textarea,label,li,summary,[role='button'],[role='link']") || []);
-      const items = candidates
-        .map((el) => {
-          const rect = el.getBoundingClientRect();
-          if (rect.width <= 0 || rect.height <= 0) return null;
-          if (rect.bottom < 0 || rect.top > height || rect.right < 0 || rect.left > width) return null;
-          const style = getComputedStyle(el);
-          if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return null;
-          const tag = el.tagName.toLowerCase();
-          const interactive = ["a", "button", "input", "select", "textarea", "summary"].includes(tag) || Boolean(el.getAttribute("role"));
-          const text = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.innerText || el.value || el.textContent || tag).trim();
-          return { x: rect.left, y: rect.top, width: rect.width, height: rect.height, text, interactive };
-        })
-        .filter(Boolean);
-      if (!items.length) {
-        items.push({ x: 18, y: 92, width: width - 36, height: 80, text: (document.body?.innerText || document.title || location.href).slice(0, 500), interactive: false });
-      }
-      return { width, height, background, title: document.title, url: location.href, items };
-    }
-  });
-  const svg = buildSvgSnapshot(injection[0]?.result || {}, reason);
-  return {
-    content: [
-      { type: "image", mimeType: "image/svg+xml", data: base64Utf8(svg) },
-      { type: "text", text: `Synthetic DOM snapshot from tab ${tab.id}` }
-    ]
-  };
 }
 
 async function autoScrollPage(tabId, steps) {
@@ -1051,7 +1039,11 @@ async function captureScreenshot(tab, args = {}) {
         }
       });
     });
-    if (!shot?.data) return captureDomSnapshot(tab, "clip screenshot returned empty image");
+    if (!shot?.data) return toolError("Real screenshot capture returned an empty image", {
+      code: "SCREENSHOT_UNAVAILABLE",
+      tabId: tab.id,
+      method: "debugger.Page.captureScreenshot"
+    });
     return {
       content: [
         { type: "image", mimeType: "image/jpeg", data: shot.data },
@@ -1120,7 +1112,11 @@ async function captureScreenshot(tab, args = {}) {
       }
     }
   }
-  if (!data) return captureDomSnapshot(tab, "screenshot capture returned empty image");
+  if (!data) return toolError("No real screenshot could be captured for the requested tab", {
+    code: "SCREENSHOT_UNAVAILABLE",
+    tabId: tab.id,
+    syntheticFallbackUsed: false
+  });
   return {
     content: [
       { type: "image", mimeType: "image/jpeg", data },
@@ -1129,7 +1125,7 @@ async function captureScreenshot(tab, args = {}) {
   };
 }
 
-async function executeTool(name, args) {
+async function executeTool(name, args, context = {}) {
   if (name === "browser_status") {
     const active = await getActiveTab();
     return contentResult({
@@ -1137,6 +1133,7 @@ async function executeTool(name, args) {
       extensionId: chrome.runtime.id,
       version: EXTENSION_VERSION,
       nativeConnected,
+      visual: browserVisualStatus,
       activeTab: active ? { id: active.id, url: active.url, title: active.title, windowId: active.windowId } : null
     });
   }
@@ -1360,8 +1357,24 @@ async function executeTool(name, args) {
   if (name === "computer") {
     const tab = await resolveTab(args.tabId);
     const action = args.action;
-    await setIndicator(tab.id, true);
+    const operationContext = {
+      ...context,
+      operationId: context.operationId || `${extensionBootId}:computer:${Date.now()}:${browserVisualSequence + 1}`
+    };
+    let visualTarget = action === "type"
+      ? { kind: "text", textLength: String(args.text || "").length }
+      : { kind: args.ref ? "ref" : "coordinate" };
+    let lastVisualPhase = null;
+    let lastVisualResult = null;
+    const emit = async (phase, target = visualTarget, options = {}) => {
+      const visualResult = await emitBrowserVisual(tab, operationContext, action, phase, target, options);
+      lastVisualPhase = phase;
+      lastVisualResult = visualResult;
+      return visualResult;
+    };
+    if (action !== "screenshot") await emit("prepare", visualTarget, { coordinatesTrusted: false });
     try {
+      const result = await (async () => {
       if (action === "screenshot") return await captureScreenshot(tab, args);
       if (action === "wait") {
         await sleep(Math.min(Number(args.duration || args.durationMs || 1000), 10000));
@@ -1385,8 +1398,15 @@ async function executeTool(name, args) {
             );
           }
           coordinate = { x: spot.x, y: spot.y };
+          visualTarget = { kind: "ref", x: spot.x, y: spot.y, width: spot.width, height: spot.height };
+        } else {
+          const x = Number(coordinate?.x ?? coordinate?.[0]);
+          const y = Number(coordinate?.y ?? coordinate?.[1]);
+          visualTarget = { kind: "coordinate", x, y };
         }
+        await emit("running", visualTarget);
         await clickAt(tab.id, coordinate, action === "right_click" ? "right" : "left", action === "double_click" ? 2 : 1);
+        await emit("input_dispatched", visualTarget);
         await sleep(800);
         return contentResult({ clicked: true, ...(args.ref ? { ref: args.ref } : {}), coordinate });
       }
@@ -1395,10 +1415,25 @@ async function executeTool(name, args) {
         if (args.ref) {
           const spot = await sendToContent(tab.id, { type: "atria.refRect", ref: args.ref });
           if (!spot?.ok) return toolError(spot?.message || "type failed", spot);
+          const focusTarget = { kind: "ref", x: spot.x, y: spot.y, width: spot.width, height: spot.height };
+          const focusOperationId = `${operationContext.operationId}:focus`;
+          await emitBrowserVisual(tab, operationContext, "left_click", "running", focusTarget, {
+            operationId: focusOperationId,
+            parentOperationId: operationContext.operationId,
+            stepIndex: 0
+          });
           await clickAt(tab.id, { x: spot.x, y: spot.y });
+          await emitBrowserVisual(tab, operationContext, "left_click", "input_dispatched", focusTarget, {
+            operationId: focusOperationId,
+            parentOperationId: operationContext.operationId,
+            stepIndex: 0
+          });
           await sleep(150);
+          visualTarget = { ...focusTarget, textLength: String(text).length };
         }
+        await emit("running", visualTarget, { coordinatesTrusted: Boolean(args.ref) });
         await typeText(tab.id, text);
+        await emit("input_dispatched", visualTarget, { coordinatesTrusted: Boolean(args.ref) });
         if (!args.ref) return contentResult({ typed: true });
         // Typing is only believable once the field reads back. Real key events
         // append rather than replace, so the check is containment, not equality.
@@ -1414,11 +1449,17 @@ async function executeTool(name, args) {
         return contentResult({ typed: true, ref: args.ref, verified: true, length: actual.length });
       }
       if (action === "key") {
+        visualTarget = { kind: "key" };
+        await emit("running", visualTarget, { coordinatesTrusted: false });
         await pressKey(tab.id, args.text || args.key || "Enter");
+        await emit("input_dispatched", visualTarget, { coordinatesTrusted: false });
         return contentResult({ pressed: true, key: args.text || args.key || "Enter" });
       }
       if (action === "scroll") {
+        await emit("running", { kind: "scroll" }, { coordinatesTrusted: false });
         const scrolled = await scrollWheel(tab.id, args);
+        visualTarget = { kind: "scroll", x: scrolled.at.x, y: scrolled.at.y };
+        await emit("input_dispatched", visualTarget);
         return contentResult({ scrolled: true, ...scrolled });
       }
       if (action === "scroll_until") {
@@ -1434,7 +1475,20 @@ async function executeTool(name, args) {
         for (let step = 0; step < maxSteps; step++) {
           const hit = await sendToContent(tab.id, { type: "atria.checkCondition", condition });
           if (hit?.met) return contentResult({ found: true, steps: step, ...condition });
-          await scrollWheel(tab.id, args);
+          const childOperationId = `${operationContext.operationId}:scroll:${step}`;
+          await emitBrowserVisual(tab, operationContext, "scroll", "running", { kind: "scroll" }, {
+            operationId: childOperationId,
+            parentOperationId: operationContext.operationId,
+            stepIndex: step,
+            coordinatesTrusted: false
+          });
+          const scrolled = await scrollWheel(tab.id, args);
+          visualTarget = { kind: "scroll", x: scrolled.at.x, y: scrolled.at.y };
+          await emitBrowserVisual(tab, operationContext, "scroll", "input_dispatched", visualTarget, {
+            operationId: childOperationId,
+            parentOperationId: operationContext.operationId,
+            stepIndex: step
+          });
           await sleep(Number(args.settleMs || 400));
         }
         const final = await sendToContent(tab.id, { type: "atria.checkCondition", condition });
@@ -1492,15 +1546,42 @@ async function executeTool(name, args) {
             continue;
           }
           lastRect = { x: spot.x, y: spot.y, width: spot.width, height: spot.height };
+          visualTarget = { kind: args.ref ? "ref" : "located", ...lastRect };
+          const childOperationId = `${operationContext.operationId}:attempt:${attempt}`;
 
           if (op === "type") {
+            await emitBrowserVisual(tab, operationContext, "left_click", "running", visualTarget, {
+              operationId: `${childOperationId}:focus`, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
             await clickAt(tab.id, { x: spot.x, y: spot.y });
+            await emitBrowserVisual(tab, operationContext, "left_click", "input_dispatched", visualTarget, {
+              operationId: `${childOperationId}:focus`, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
             await sleep(120);
+            const typeTarget = { ...visualTarget, textLength: String(args.text || "").length };
+            await emitBrowserVisual(tab, operationContext, "type", "running", typeTarget, {
+              operationId: childOperationId, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
             await typeText(tab.id, args.text || "");
+            await emitBrowserVisual(tab, operationContext, "type", "input_dispatched", typeTarget, {
+              operationId: childOperationId, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
           } else if (op === "key") {
+            await emitBrowserVisual(tab, operationContext, "key", "running", visualTarget, {
+              operationId: childOperationId, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
             await pressKey(tab.id, args.key || args.text || "Enter");
+            await emitBrowserVisual(tab, operationContext, "key", "input_dispatched", visualTarget, {
+              operationId: childOperationId, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
           } else {
+            await emitBrowserVisual(tab, operationContext, op, "running", visualTarget, {
+              operationId: childOperationId, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
             await clickAt(tab.id, { x: spot.x, y: spot.y }, op === "right_click" ? "right" : "left", op === "double_click" ? 2 : 1);
+            await emitBrowserVisual(tab, operationContext, op, "input_dispatched", visualTarget, {
+              operationId: childOperationId, parentOperationId: operationContext.operationId, stepIndex: attempt - 1
+            });
           }
           await sleep(settleMs);
 
@@ -1522,7 +1603,10 @@ async function executeTool(name, args) {
         if (found.covered) {
           return toolError(`target is covered by <${found.hit}> at (${found.x}, ${found.y})`, found);
         }
+        visualTarget = { kind: "located", x: found.x, y: found.y, width: found.width, height: found.height };
+        await emit("running", visualTarget);
         await clickAt(tab.id, { x: found.x, y: found.y });
+        await emit("input_dispatched", visualTarget);
         await sleep(Number(args.settleMs || 800));
         let verified = null;
         if (args.verifyJs) {
@@ -1535,13 +1619,27 @@ async function executeTool(name, args) {
         return contentResult({ clicked: true, verified, rect: { x: found.x, y: found.y, width: found.width, height: found.height } });
       }
       if (action === "scroll_to") {
+        await emit("running", { kind: "ref" }, { coordinatesTrusted: false });
         const result = await sendToContent(tab.id, { type: "atria.scrollToRef", ref: args.ref });
         if (!result?.ok) return toolError(result?.message || "scroll_to failed", result);
+        visualTarget = Number.isFinite(Number(result.x)) && Number.isFinite(Number(result.y))
+          ? { kind: "ref", x: Number(result.x), y: Number(result.y), width: Number(result.width || 0), height: Number(result.height || 0) }
+          : { kind: "ref" };
+        await emit("input_dispatched", visualTarget, { coordinatesTrusted: Number.isFinite(Number(result.x)) && Number.isFinite(Number(result.y)) });
         return contentResult({ scrolled: true, ref: args.ref });
       }
       return toolError(`Unsupported computer action: ${action}`);
-    } finally {
-      await setIndicator(tab.id, false);
+      })();
+      const completionPhase = resolveVisualCompletionPhase(result, lastVisualPhase);
+      if (completionPhase) {
+        lastVisualResult = await emit(completionPhase, visualTarget, {
+          outcome: completionPhase === "failed" ? "failed" : "succeeded"
+        });
+      }
+      return lastVisualResult ? attachVisualMetadata(result, lastVisualResult) : result;
+    } catch (error) {
+      await emit("failed", visualTarget, { outcome: "failed" });
+      throw error;
     }
   }
 
@@ -1764,7 +1862,7 @@ async function executeTool(name, args) {
   }
 
   if (name === "browser_batch") {
-    return contentResult(await runBatch(args.actions, Boolean(args.continueOnError)));
+    return contentResult(await runBatch(args.actions, Boolean(args.continueOnError), context));
   }
 
   if (name === "browser_parallel") {
@@ -1783,7 +1881,17 @@ async function executeTool(name, args) {
           input: { ...(step.input || step.arguments || {}), ...(batch.tabId !== undefined ? { tabId: batch.tabId } : {}) }
         }));
         try {
-          return { index, tabId: batch.tabId, ok: true, steps: await runBatch(actions, batch.continueOnError !== false) };
+          return {
+            index,
+            tabId: batch.tabId,
+            ok: true,
+            steps: await runBatch(actions, batch.continueOnError !== false, {
+              ...context,
+              operationId: `${context.operationId || `${extensionBootId}:parallel`}:batch:${index}`,
+              parentOperationId: context.operationId,
+              stepIndex: index
+            })
+          };
         } catch (error) {
           return { index, tabId: batch.tabId, ok: false, error: error?.message || String(error) };
         }
@@ -1795,10 +1903,18 @@ async function executeTool(name, args) {
   return toolError(`Tool not implemented in extension: ${name}`);
 }
 
-async function runBatch(actions, continueOnError) {
+async function runBatch(actions, continueOnError, context = {}) {
   const outputs = [];
-  for (const item of Array.isArray(actions) ? actions : []) {
-    const result = await executeTool(item.name, item.input || item.arguments || {});
+  const list = Array.isArray(actions) ? actions : [];
+  for (let index = 0; index < list.length; index += 1) {
+    const item = list[index];
+    const parentOperationId = context.operationId || `${extensionBootId}:batch:${Date.now()}`;
+    const result = await executeTool(item.name, item.input || item.arguments || {}, {
+      ...context,
+      operationId: `${parentOperationId}:step:${index}`,
+      parentOperationId,
+      stepIndex: index
+    });
     const failed = Boolean(result?.isError);
     outputs.push({ name: item.name, ok: !failed, result });
     // Crawling a list of pages should not lose pages 4 and 5 because page 3
@@ -1809,29 +1925,110 @@ async function runBatch(actions, continueOnError) {
 }
 
 async function handleEnvelope(envelope) {
-  const result = await executeTool(envelope.tool || envelope.name, envelope.args || envelope.arguments || {});
+  const deadline = Date.parse(envelope.deadlineAt || "");
+  if (Number.isFinite(deadline) && deadline <= Date.now()) {
+    return {
+      id: envelope.id,
+      operationId: envelope.operationId || envelope.id,
+      ok: false,
+      result: toolError("Operation expired before extension dispatch", {
+        status: "cancelled",
+        operationId: envelope.operationId || envelope.id
+      })
+    };
+  }
+  const result = await executeTool(envelope.tool || envelope.name, envelope.args || envelope.arguments || {}, {
+    operationId: envelope.operationId || envelope.id,
+    sessionId: envelope.sessionId || extensionSessionId
+  });
   return {
     id: envelope.id,
+    operationId: envelope.operationId || envelope.id,
     ok: !result?.isError,
     result
   };
 }
 
+function sanitizeVisualTarget(target) {
+  const source = target && typeof target === "object" ? target : {};
+  const clean = {};
+  for (const key of ["x", "y", "width", "height", "textLength"]) {
+    const value = Number(source[key]);
+    if (Number.isFinite(value)) clean[key] = value;
+  }
+  if (typeof source.kind === "string") clean.kind = source.kind.slice(0, 40);
+  return clean;
+}
+
+async function emitBrowserVisual(tab, context, action, phase, target = {}, options = {}) {
+  const operationId = String(options.operationId || context.operationId || `${extensionBootId}:local:${Date.now()}`);
+  const event = {
+    schemaVersion: 1,
+    bootId: extensionBootId,
+    sessionId: String(context.sessionId || extensionSessionId),
+    operationId,
+    sequence: ++browserVisualSequence,
+    action: String(action || "unknown").slice(0, 60),
+    phase,
+    target: sanitizeVisualTarget(target),
+    coordinateSpace: "viewport_css",
+    timestamp: new Date().toISOString(),
+    outcome: options.outcome || (phase === "failed" ? "failed" : phase === "unknown" ? "unknown" : phase === "cancelled" ? "cancelled" : null),
+    tabId: tab.id,
+    frameId: Number.isInteger(options.frameId) ? options.frameId : 0,
+    active: Boolean(tab.active),
+    coordinatesTrusted: options.coordinatesTrusted !== false
+  };
+  if (context.parentOperationId) event.parentOperationId = context.parentOperationId;
+  if (Number.isInteger(context.stepIndex)) event.stepIndex = context.stepIndex;
+  if (options.parentOperationId) event.parentOperationId = options.parentOperationId;
+  if (Number.isInteger(options.stepIndex)) event.stepIndex = options.stepIndex;
+  try {
+    await ensureContentScript(tab.id);
+    const response = await chrome.tabs.sendMessage(tab.id, { type: "atria.visual", event });
+    if (!response?.ok) throw new Error("visual indicator did not acknowledge the event");
+    browserVisualStatus = {
+      available: true,
+      tabId: tab.id,
+      operationId,
+      renderedAt: response.renderedAt,
+      coordinatesRendered: Boolean(response.coordinatesRendered),
+      active: Boolean(tab.active),
+      updatedAt: new Date().toISOString()
+    };
+    return browserVisualStatus;
+  } catch (error) {
+    browserVisualStatus = {
+      available: false,
+      tabId: tab.id,
+      operationId,
+      reason: `page-injection-unavailable: ${error?.message || String(error)}`.slice(0, 240),
+      updatedAt: new Date().toISOString()
+    };
+    return browserVisualStatus;
+  }
+}
+
 async function pollOnce() {
   const clientId = await getClientId();
+  const token = await getBridgeToken();
+  if (!token) throw new Error("browser bridge pairing required");
   const base = await bridgeBase("http");
-  const response = await fetch(`${base}/extension/next?clientId=${encodeURIComponent(clientId)}&version=${encodeURIComponent(EXTENSION_VERSION)}&protocol=${PROTOCOL_VERSION}`, {
-    cache: "no-store"
+  const response = await fetch(`${base}/extension/next?${identityQuery(clientId)}`, {
+    cache: "no-store",
+    headers: { "X-Atria-Token": token }
   });
   if (response.status === 204) return false;
   if (!response.ok) throw new Error(`bridge HTTP ${response.status}`);
   const envelope = await response.json();
   const payload = await handleEnvelope(envelope).catch((error) => ({
     id: envelope.id,
+    operationId: envelope.operationId || envelope.id,
     ok: false,
     result: toolError(error?.message || String(error))
   }));
-  await postJson("/extension/result", payload);
+  payload.clientId = clientId;
+  await postJson(`/extension/result?${identityQuery(clientId)}`, payload);
   return true;
 }
 
@@ -1910,6 +2107,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       connectSocket();
       pollLoop();
       sendResponse({ ok: true, port });
+    });
+    return true;
+  }
+  if (message && message.type === "atria.setBridgeToken") {
+    const token = String(message.token || "").trim();
+    if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) {
+      sendResponse({ ok: false, error: "配对密钥格式无效" });
+      return false;
+    }
+    chrome.storage.local.set({ [BRIDGE_TOKEN_KEY]: token }).then(() => {
+      try {
+        bridgeSocket?.close();
+      } catch (_) {}
+      bridgeSocket = null;
+      connectSocket();
+      pollLoop();
+      sendResponse({ ok: true });
     });
     return true;
   }

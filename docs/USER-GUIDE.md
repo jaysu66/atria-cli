@@ -16,7 +16,9 @@ Chrome 扩展 / Windows UI Automation / native recorder
 结构化结果、截图、事件文件或生成的 Skill
 ```
 
-当前是私有预览源代码包，已上传到私有 GitHub 仓库但尚未公开；不包含云端模型、登录状态、Cookie、公司数据或用户生成的 Skill。
+当前是 `0.2.0-rc.1` 源码开源候选，最终确认前仓库仍保持私有；不包含云端模型、登录状态、Cookie、公司数据或用户生成的 Skill。原生二进制候选与源码候选分开保管。
+
+本版修复了显示组件启动期间暂停/停止失效、过期滚动目标被忽略，以及元素拖拽和批量操作丢失快照编号的问题。暂停会保留等待中的动作，恢复后继续；停止会取消原动作，之后恢复只允许新提交的工作。元素操作必须携带 `ui_snapshot` 返回的 `snapshotId`；拖拽两端与一个 batch 的元素步骤共用对应快照编号。错误目标会明确失败，只有未指定滚动目标时才使用鼠标当前位置。
 
 ## 能力地图
 
@@ -43,6 +45,8 @@ node .\bin\atria.mjs desktop
 ```
 
 首次运行必须先构建 `record-replay-windows` 的 native actor/recorder；预览包刻意没有分发 `.exe`。
+
+可选择 `atria visual enable` 启动独立、点击穿透且不抢焦点的 Windows 动作提示；`atria visual enable --required` 会在提示层未就绪时阻止下一次写动作。`event_stream_panel` 是另一种宿主内录制 widget，只有支持 MCP resources 的宿主才显示。
 
 ### 录制与复用：`atria-recording` + `record-replay-windows`
 
@@ -74,13 +78,15 @@ atria browser [组件参数]
 atria desktop [组件参数]
 atria recording [组件参数]
 atria mcp --capability browser|desktop|recording
+atria visual status|enable [--required]|disable
+atria automation status [operationId]|pause|resume|stop
 ```
 
 CLI 参数会透传给对应组件；未知命令会返回退出码 2。`doctor --json` 中：
 
 - `sourceReady`：包内源码、适配器和 Skill 是否齐全。
 - `runtimeReady`：桌面依赖与 native 二进制是否已在本机就绪。
-- `ok`：两者都满足时才为 `true`。
+- `ok`：未选组件时表示源码包结构可用；使用 `--component` 时只表示所选组件就绪。不要用它替代真实浏览器/桌面验收。
 
 ## 安全与隐私
 
@@ -104,16 +110,16 @@ CLI 参数会透传给对应组件；未知命令会返回退出码 2。`doctor 
 
 停止回放，保存事件和截图，重新获取 UI snapshot；检查窗口焦点、控件层级和目标数据是否变化。先修正生成的 Skill，再重新 dry-run。
 
-## 更新和回滚（当前预览）
+## 更新和回滚（当前候选）
 
-预览没有 `atria update`。更新时下载新 ZIP 或拉取受控 Git 分支，核对版本和 SHA-256，执行 `npm run verify`、`doctor`，确认后再替换 CLI 文件。把用户生成的 Skill 放在包外的独立目录；不要覆盖它们。升级失败时恢复上一份完整目录即可回滚。
+候选没有 `atria update`。更新时下载新 ZIP 或拉取受控 Git 分支，核对版本、来源提交和 SHA-256，执行 `npm test`、`npm run verify`、逐组件 `doctor`，确认后再替换 CLI、Skill、server 和对应二进制这一整套。把用户生成的 Skill、录制、配对令牌和配置放在包外；不要覆盖它们。升级失败时恢复上一份完整目录并回读版本/摘要即可回滚。
 
 ## 当前未提供的功能
 
 - 一键安装器和自动更新
 - 在线 Skill Registry 或云端同步
 - 自动安装 Rust、Node 依赖和 Chrome 扩展
-- 随包分发的 Windows native 二进制
+- 获得公开再分发许可的 Windows native 二进制
 - 已完成许可清理的正式公共发行版
 
 这些是后续发布工作，不应从当前预览的命令行为中推断已经实现。

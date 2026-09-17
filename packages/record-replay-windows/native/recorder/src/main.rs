@@ -31,17 +31,52 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW,
     GetSystemMetrics as GetUiSystemMetrics, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, PostThreadMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, MSG, SM_CXVIRTUALSCREEN,
+    GetWindowThreadProcessId, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, SM_CXVIRTUALSCREEN,
     SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WH_KEYBOARD_LL, WH_MOUSE_LL,
     WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
     WM_SYSKEYDOWN,
 };
 
 static ACTIVE: OnceLock<Arc<Mutex<Option<RecordingState>>>> = OnceLock::new();
+static PACKET_DECODER: OnceLock<Mutex<PacketDecoder>> = OnceLock::new();
 
 fn active() -> &'static Arc<Mutex<Option<RecordingState>>> {
     ACTIVE.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+fn packet_decoder() -> &'static Mutex<PacketDecoder> {
+    PACKET_DECODER.get_or_init(|| Mutex::new(PacketDecoder::default()))
+}
+
+#[derive(Default)]
+struct PacketDecoder {
+    pending_high_surrogate: Option<u16>,
+}
+
+impl PacketDecoder {
+    fn push(&mut self, unit: u16) -> Vec<String> {
+        let mut out = Vec::new();
+        if (0xD800..=0xDBFF).contains(&unit) {
+            if let Some(orphan) = self.pending_high_surrogate.replace(unit) {
+                out.push(String::from_utf16_lossy(&[orphan]));
+            }
+            return out;
+        }
+        if let Some(high) = self.pending_high_surrogate.take() {
+            if (0xDC00..=0xDFFF).contains(&unit) {
+                out.push(String::from_utf16_lossy(&[high, unit]));
+                return out;
+            }
+            out.push(String::from_utf16_lossy(&[high]));
+        }
+        out.push(String::from_utf16_lossy(&[unit]));
+        out
+    }
+
+    fn reset(&mut self) {
+        self.pending_high_surrogate = None;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,7 +118,7 @@ fn default_max_duration() -> u64 {
 }
 
 fn default_capture_policy() -> String {
-    "key_events".to_string()
+    "off".to_string()
 }
 
 fn default_true() -> bool {
@@ -197,12 +232,15 @@ fn handle_request(request: &RpcRequest) -> Result<Value> {
 }
 
 fn start_recording(params: StartParams) -> Result<Value> {
+    validate_capture_privacy(&params.capture_policy, params.redact_text)?;
+
     let mut guard = active().lock().unwrap();
     if let Some(state) = guard.as_ref() {
         return Ok(state.public_status());
     }
 
     fs::create_dir_all(&params.session_root)?;
+    packet_decoder().lock().unwrap().reset();
     let session_id = format!(
         "{}-{}",
         Utc::now().format("%Y%m%d-%H%M%S"),
@@ -215,7 +253,10 @@ fn start_recording(params: StartParams) -> Result<Value> {
     let events_path = session_dir.join("events.jsonl");
     let metadata_path = session_dir.join("metadata.json");
     let suppressed_events_path = session_dir.join("suppressed_events.jsonl");
-    let events_file = OpenOptions::new().create(true).append(true).open(&events_path)?;
+    let events_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&events_path)?;
     let suppressed_file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -232,7 +273,11 @@ fn start_recording(params: StartParams) -> Result<Value> {
         capture_policy: params.capture_policy,
         install_skill_on_stop: params.install_skill_on_stop,
         redact_text: params.redact_text,
-        exclude_apps: params.exclude_apps.into_iter().map(|s| s.to_lowercase()).collect(),
+        exclude_apps: params
+            .exclude_apps
+            .into_iter()
+            .map(|s| s.to_lowercase())
+            .collect(),
         started_at: Utc::now(),
         started_instant: Instant::now(),
         event_count: 0,
@@ -251,7 +296,9 @@ fn start_recording(params: StartParams) -> Result<Value> {
         hook_thread_main();
     });
     thread::sleep(Duration::from_millis(200));
-    let state = guard.as_mut().expect("recording state should exist after start");
+    let state = guard
+        .as_mut()
+        .expect("recording state should exist after start");
     state.hook_thread = Some(handle);
     let watchdog_session_id = state.session_id.clone();
     let watchdog_duration = state.max_duration_seconds;
@@ -360,7 +407,10 @@ fn write_metadata(state: &RecordingState, stopped: bool) -> Result<()> {
             "capturePath": "optional key-event PNG screenshot path"
         }
     });
-    fs::write(&state.metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+    fs::write(
+        &state.metadata_path,
+        serde_json::to_string_pretty(&metadata)?,
+    )?;
     Ok(())
 }
 
@@ -374,11 +424,14 @@ unsafe fn hook_thread_main() {
 
     let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0);
     let keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), None, 0);
-    record_notice("recorder.notice", json!({
-        "message": "hooks_installed",
-        "mouseHook": mouse_hook.is_ok(),
-        "keyboardHook": keyboard_hook.is_ok(),
-    }));
+    record_notice(
+        "recorder.notice",
+        json!({
+            "message": "hooks_installed",
+            "mouseHook": mouse_hook.is_ok(),
+            "keyboardHook": keyboard_hook.is_ok(),
+        }),
+    );
 
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -386,7 +439,9 @@ unsafe fn hook_thread_main() {
             let guard = active().lock().unwrap();
             guard
                 .as_ref()
-                .map(|state| state.started_instant.elapsed().as_secs() >= state.max_duration_seconds)
+                .map(|state| {
+                    state.started_instant.elapsed().as_secs() >= state.max_duration_seconds
+                })
                 .unwrap_or(true)
         };
         if timed_out {
@@ -419,17 +474,21 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 WM_MOUSEWHEEL => "mouse.wheel",
                 _ => "mouse.event",
             };
-            record_input_event(event_type, Some(info.pt), json!({
-                "button": match message {
-                    WM_LBUTTONDOWN => "left",
-                    WM_RBUTTONDOWN => "right",
-                    WM_MBUTTONDOWN => "middle",
-                    WM_MOUSEWHEEL => "wheel",
-                    _ => "unknown"
-                },
-                "x": info.pt.x,
-                "y": info.pt.y,
-            }));
+            record_input_event(
+                event_type,
+                Some(info.pt),
+                json!({
+                    "button": match message {
+                        WM_LBUTTONDOWN => "left",
+                        WM_RBUTTONDOWN => "right",
+                        WM_MBUTTONDOWN => "middle",
+                        WM_MOUSEWHEEL => "wheel",
+                        _ => "unknown"
+                    },
+                    "x": info.pt.x,
+                    "y": info.pt.y,
+                }),
+            );
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
@@ -441,27 +500,61 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN) {
             let info = *(lparam.0 as *const KBDLLHOOKSTRUCT);
             let key_name = key_name(info.vkCode);
-            let redacted = should_redact_key(&key_name);
+            let redacted = recording_redacts_text() && should_redact_key(info.vkCode, &key_name);
             if redacted {
-                record_suppressed_event("keyboard.key", json!({
-                    "reason": "sensitive_or_text_input_redacted",
-                    "vkCode": info.vkCode,
-                    "keyName": key_name,
-                }));
+                record_suppressed_event(
+                    "keyboard.key",
+                    json!({
+                        "reason": "sensitive_or_text_input_redacted",
+                        "keyClass": "text",
+                        "count": 1,
+                    }),
+                );
+            } else if info.vkCode == 0xE7 {
+                let segments = packet_decoder().lock().unwrap().push(info.scanCode as u16);
+                for text in segments {
+                    let utf16_length = text.encode_utf16().count();
+                    record_input_event(
+                        "keyboard.text",
+                        None,
+                        json!({
+                            "text": text,
+                            "utf16Length": utf16_length,
+                            "source": "vk_packet",
+                        }),
+                    );
+                }
             } else {
-                record_input_event("keyboard.key", None, json!({
-                    "vkCode": info.vkCode,
-                    "keyName": key_name,
-                }));
+                record_input_event(
+                    "keyboard.key",
+                    None,
+                    json!({
+                        "vkCode": info.vkCode,
+                        "keyName": key_name,
+                    }),
+                );
             }
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
 }
 
-fn should_redact_key(key_name: &str) -> bool {
+fn recording_redacts_text() -> bool {
+    active()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|state| state.redact_text)
+        .unwrap_or(true)
+}
+
+fn should_redact_key(vk_code: u32, key_name: &str) -> bool {
     let key = key_name.to_lowercase();
-    key.len() == 1 || key.contains("password") || key.contains("otp") || key.contains("token")
+    vk_code == 0xE7
+        || key.chars().count() == 1
+        || key.contains("password")
+        || key.contains("otp")
+        || key.contains("token")
 }
 
 fn key_name(vk_code: u32) -> String {
@@ -487,17 +580,31 @@ fn record_input_event(event_type: &str, point: Option<POINT>, input: Value) {
 }
 
 fn should_capture_event(event_type: &str) -> bool {
-    event_type == "keyboard.key"
+    matches!(event_type, "keyboard.key" | "keyboard.text")
+}
+
+fn validate_capture_privacy(capture_policy: &str, redact_text: bool) -> Result<()> {
+    if redact_text && capture_policy == "key_events" {
+        return Err(anyhow!(
+            "CAPTURE_REQUIRES_TEXT_OPT_IN: key-event screenshots require redactText=false"
+        ));
+    }
+    Ok(())
+}
+
+fn should_capture_screenshot(capture: bool, capture_policy: &str, redact_text: bool) -> bool {
+    capture && capture_policy == "key_events" && !redact_text
 }
 
 fn record_event(event_type: &str, point: Option<POINT>, input: Value, capture: bool) {
-    let Some((session_id, exclude_apps, capture_policy, captures_dir)) = ({
+    let Some((session_id, exclude_apps, capture_policy, redact_text, captures_dir)) = ({
         let guard = active().lock().unwrap();
         guard.as_ref().map(|state| {
             (
                 state.session_id.clone(),
                 state.exclude_apps.clone(),
                 state.capture_policy.clone(),
+                state.redact_text,
                 state.captures_dir.clone(),
             )
         })
@@ -511,7 +618,10 @@ fn record_event(event_type: &str, point: Option<POINT>, input: Value, capture: b
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_lowercase();
-    if exclude_apps.iter().any(|excluded| app_name.contains(excluded)) {
+    if exclude_apps
+        .iter()
+        .any(|excluded| app_name.contains(excluded))
+    {
         let suppressed = json!({
             "eventID": Uuid::new_v4(),
             "type": event_type,
@@ -527,16 +637,12 @@ fn record_event(event_type: &str, point: Option<POINT>, input: Value, capture: b
             return;
         }
         state.suppressed_count += 1;
-        let _ = writeln!(
-            state.suppressed_file,
-            "{}",
-            suppressed
-        );
+        let _ = writeln!(state.suppressed_file, "{}", suppressed);
         return;
     }
 
     let event_id = Uuid::new_v4().to_string();
-    let capture_path = if capture && capture_policy == "key_events" {
+    let capture_path = if should_capture_screenshot(capture, &capture_policy, redact_text) {
         capture_screen(&captures_dir, &event_id).ok()
     } else {
         None
@@ -617,7 +723,11 @@ fn foreground_window_context() -> Value {
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_default();
-        let dpi = if !hwnd.0.is_null() { GetDpiForWindow(hwnd) } else { 0 };
+        let dpi = if !hwnd.0.is_null() {
+            GetDpiForWindow(hwnd)
+        } else {
+            0
+        };
         json!({
             "hwnd": hwnd.0 as isize,
             "threadId": thread_id,
@@ -705,7 +815,17 @@ fn capture_screen(captures_dir: &Path, event_id: &str) -> Result<String> {
         let mem_dc = CreateCompatibleDC(Some(screen_dc));
         let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
         let old_obj = SelectObject(mem_dc, HGDIOBJ(bitmap.0));
-        let _ = BitBlt(mem_dc, 0, 0, width, height, Some(screen_dc), left, top, SRCCOPY);
+        let _ = BitBlt(
+            mem_dc,
+            0,
+            0,
+            width,
+            height,
+            Some(screen_dc),
+            left,
+            top,
+            SRCCOPY,
+        );
 
         let mut bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -754,15 +874,47 @@ mod tests {
 
     #[test]
     fn redacts_single_character_keys() {
-        assert!(should_redact_key("A"));
-        assert!(!should_redact_key("Enter"));
+        assert!(should_redact_key(0x41, "A"));
+        assert!(should_redact_key(0xE7, "VK_231"));
+        assert!(!should_redact_key(0x0D, "Enter"));
     }
 
     #[test]
     fn only_keyboard_events_trigger_capture_policy() {
         assert!(should_capture_event("keyboard.key"));
+        assert!(should_capture_event("keyboard.text"));
         assert!(!should_capture_event("mouse.click"));
         assert!(!should_capture_event("recorder.notice"));
+    }
+
+    #[test]
+    fn capture_policy_defaults_to_off() {
+        assert_eq!(default_capture_policy(), "off");
+    }
+
+    #[test]
+    fn redacted_recording_rejects_key_event_screenshots() {
+        let error = validate_capture_privacy("key_events", true).unwrap_err();
+        assert!(format!("{error:#}").contains("CAPTURE_REQUIRES_TEXT_OPT_IN"));
+        assert!(validate_capture_privacy("off", true).is_ok());
+        assert!(validate_capture_privacy("key_events", false).is_ok());
+    }
+
+    #[test]
+    fn screenshot_guard_requires_explicit_text_opt_in() {
+        assert!(!should_capture_screenshot(true, "key_events", true));
+        assert!(should_capture_screenshot(true, "key_events", false));
+        assert!(!should_capture_screenshot(true, "off", false));
+        assert!(!should_capture_screenshot(false, "key_events", false));
+    }
+
+    #[test]
+    fn packet_decoder_combines_surrogate_pairs_without_losing_cjk() {
+        let mut decoder = PacketDecoder::default();
+        assert_eq!(decoder.push('你' as u16), vec!["你"]);
+        assert!(decoder.push(0xD83D).is_empty());
+        assert_eq!(decoder.push(0xDE00), vec!["😀"]);
+        assert_eq!(decoder.push('\n' as u16), vec!["\n"]);
     }
 
     #[test]

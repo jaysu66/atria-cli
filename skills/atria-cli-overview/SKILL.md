@@ -31,6 +31,7 @@ From the bundle root:
 npm run doctor
 node .\bin\atria.mjs skills list
 node .\bin\atria.mjs browser --standalone
+node .\bin\atria.mjs visual status
 ```
 
 Use `doctor --json` before claiming that a capability is runnable. A source
@@ -49,13 +50,17 @@ or native binaries are still missing.
    occur. Do not expose cookies, passwords, OTPs, tokens, or generated session
    exports.
 6. Report source-ready, runtime-ready, and license-ready as separate states.
+7. Explain that the standalone visual overlay and the host-rendered
+   `event_stream_panel` widget are separate. Use `atria automation
+   pause|resume|stop` for desktop execution; do not claim those commands pause
+   Browser Bridge calls.
 
 ## User-facing explanation
 
 Describe Atria CLI as a local capability layer: the user can ask an Agent to
 operate a browser or Windows app, or teach a repeatable workflow by demonstration.
 Do not call this bundle a one-click installer or a cloud service. The current
-preview requires manual Chrome extension setup and a separately built Windows
+source candidate requires manual Chrome extension setup and a separately built Windows
 native runtime for desktop recording/replay.
 
 Read the root `README.md`, `docs/QUICKSTART.md`, and the selected capability's

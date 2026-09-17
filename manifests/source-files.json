@@ -1,0 +1,690 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-17T04:16:33.507Z",
+  "policy": "Only tracked Git files or the two declared non-Git Skill snapshots are synchronized. Native binaries are excluded.",
+  "sources": {
+    "browser-bridge": {
+      "sourceOfTruth": "Atria/02-CLI与通用能力/browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836"
+    },
+    "record-replay-windows": {
+      "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8"
+    },
+    "atria-desktop-skill": {
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-desktop",
+      "sourceCommit": null
+    },
+    "atria-recording-skill": {
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-recording",
+      "sourceCommit": null
+    }
+  },
+  "files": [
+    {
+      "destination": "packages/browser-bridge/.gitignore",
+      "sha256": "5de2eb9fb5aa45893971a3cc0808258227cc3b536c83ca6a2edd17e5a77be938",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": ".gitignore"
+    },
+    {
+      "destination": "packages/browser-bridge/assets/hero.png",
+      "sha256": "2d1b64645da277bcdf393d467a3da8bf207c6cb0549dfcc6a3aa96c48712b7ad",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "assets/hero.png"
+    },
+    {
+      "destination": "packages/browser-bridge/docs/使用指南.md",
+      "sha256": "b171b0029807290ab3eac52da01ffe72fa3390933a500dc7b6036da3a0834527",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "docs/使用指南.md"
+    },
+    {
+      "destination": "packages/browser-bridge/extension/content/accessibility-tree.js",
+      "sha256": "e92cb5558b38b1c66274ba29697beb53ca5133f0181972220d157c31c5f33ee9",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "extension/content/accessibility-tree.js"
+    },
+    {
+      "destination": "packages/browser-bridge/extension/content/visual-indicator.js",
+      "sha256": "d33727def721151c6e84a2eadb1c917ead5ad9dd826820c379a34aaf990d02c9",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "extension/content/visual-indicator.js"
+    },
+    {
+      "destination": "packages/browser-bridge/extension/manifest.json",
+      "sha256": "ae624eae77a6be876c8e266b5427a97b2b4e35757dd863813658e1f1c202e298",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "extension/manifest.json"
+    },
+    {
+      "destination": "packages/browser-bridge/extension/popup.html",
+      "sha256": "4b925ecef353c96cc614e692559db3fba6cf4d8147803f91bde96338df950fef",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "extension/popup.html"
+    },
+    {
+      "destination": "packages/browser-bridge/extension/popup.js",
+      "sha256": "6b9b620183b1e484d9cef94c69c20b19cb93ee1935c491a23abb93f55fa9b930",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "extension/popup.js"
+    },
+    {
+      "destination": "packages/browser-bridge/extension/service-worker.js",
+      "sha256": "32e623f0e357444193990d0436ba40a5b92e46b31a26b469bb68ca01d0bf87bb",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "extension/service-worker.js"
+    },
+    {
+      "destination": "packages/browser-bridge/fixtures/fake-challenge.html",
+      "sha256": "a1d354990c90f23c8c1f3ed38c4cf0901cb0caa2620ea97105507f7a522262ec",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "fixtures/fake-challenge.html"
+    },
+    {
+      "destination": "packages/browser-bridge/fixtures/heavy-page.html",
+      "sha256": "65bde27ebca47bb0c438244533096b695adbf7a9791c98db605e7c70e41910c5",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "fixtures/heavy-page.html"
+    },
+    {
+      "destination": "packages/browser-bridge/fixtures/listing-page.html",
+      "sha256": "9e02cef87ed353c6954110d4a0e970441489f95d363f7ab321e55793a029c96a",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "fixtures/listing-page.html"
+    },
+    {
+      "destination": "packages/browser-bridge/fixtures/redaction-form.html",
+      "sha256": "126974895c37dc3c06adc5dd2b959dd9baae2bf55959d63f3c2902d8776f1f57",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "fixtures/redaction-form.html"
+    },
+    {
+      "destination": "packages/browser-bridge/fixtures/virtual-list.html",
+      "sha256": "75ce46e8dc27004008dbe8b20dfcf7ee62a018579cacc86ebf28cde6d23034dd",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "fixtures/virtual-list.html"
+    },
+    {
+      "destination": "packages/browser-bridge/fixtures/visual-feedback.html",
+      "sha256": "ccbf6286b85c827da06a8539d3a431e971f43351584153fa4697a34c69ae457f",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "fixtures/visual-feedback.html"
+    },
+    {
+      "destination": "packages/browser-bridge/lib/local-auth.js",
+      "sha256": "4377cfcf34ca00834ba5ac8798c1b9d70a3005d8dbe04253af6dbfdbaedb5563",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "lib/local-auth.js"
+    },
+    {
+      "destination": "packages/browser-bridge/lib/operation-registry.js",
+      "sha256": "88f67595e0bab9f4a5c8f195795e0f3f706354fe4b8ee5ccdaab690777401e98",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "lib/operation-registry.js"
+    },
+    {
+      "destination": "packages/browser-bridge/LICENSE",
+      "sha256": "e262e2e3691cea692c832ac9c0603cd22bf6f73bcef2b78ba150efc9c2a423d3",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "LICENSE"
+    },
+    {
+      "destination": "packages/browser-bridge/mcp-server.js",
+      "sha256": "4a20bbe197e3189af1d371d9292b055f504e8f033c573e29ecf01b1df2703bf1",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "mcp-server.js"
+    },
+    {
+      "destination": "packages/browser-bridge/native-host/native-host.cmd",
+      "sha256": "48e40c46c1bb84c87475fcf9718ffbfe06a05e898d6488dde7c5c9456dfb9b93",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "native-host/native-host.cmd"
+    },
+    {
+      "destination": "packages/browser-bridge/native-host/native-host.js",
+      "sha256": "07943507fa3fdc8d0ba3c6fc50a863ffde9216935e89711e91eff4cf1e120cf5",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "native-host/native-host.js"
+    },
+    {
+      "destination": "packages/browser-bridge/package.json",
+      "sha256": "a5c30d0f1a198448a45a52d15b1c8f2f4011060287eb37a20746346875347ab8",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "package.json"
+    },
+    {
+      "destination": "packages/browser-bridge/README.md",
+      "sha256": "76ee98da8c8c929694ef3739f3a308dbedbea4d7c162446aa2199ba0ae726991",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "README.md"
+    },
+    {
+      "destination": "packages/browser-bridge/scripts/acceptance.js",
+      "sha256": "2adce1fd511ba21208f792314e0d977501bc083b74426488ffed30b1793e3a43",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "scripts/acceptance.js"
+    },
+    {
+      "destination": "packages/browser-bridge/scripts/install-native-host.ps1",
+      "sha256": "1c6839dc93754d51095b41a6944fe0af878c0011a7c6f5913ac4660eb75086ed",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "scripts/install-native-host.ps1"
+    },
+    {
+      "destination": "packages/browser-bridge/scripts/serve-fixtures.js",
+      "sha256": "4ed76c78571f5b87f35dea763bd98f4bda3282c54ba1e95bd7bf488a26b92cea",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "scripts/serve-fixtures.js"
+    },
+    {
+      "destination": "packages/browser-bridge/scripts/smoke-mcp.js",
+      "sha256": "9961d33a7b06f96aabe63935f5f41ce5acb29317971fdd09d1be860d4afb9b95",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "scripts/smoke-mcp.js"
+    },
+    {
+      "destination": "packages/browser-bridge/scripts/verify-static.ps1",
+      "sha256": "20cc279a5c8f4eeb41c534867eb2a43200984b9569b1144dd8bdd5ed8307410e",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "scripts/verify-static.ps1"
+    },
+    {
+      "destination": "packages/browser-bridge/scripts/visual-acceptance.js",
+      "sha256": "385b24e410316e52579baddfd0c5c1787fffa739f91455775f9f3008b03791a1",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "scripts/visual-acceptance.js"
+    },
+    {
+      "destination": "packages/browser-bridge/skills/atria-browser-bridge/README.md",
+      "sha256": "20cf47f2b9492a9129ae027429be9b5fe5c8da444e6afa679172086c02c4cb32",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/README.md"
+    },
+    {
+      "destination": "packages/browser-bridge/skills/atria-browser-bridge/references/setup.md",
+      "sha256": "8690d027f37e9aa94f063feed1207c1f74358722c9d86ea80392d3b373525644",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/references/setup.md"
+    },
+    {
+      "destination": "packages/browser-bridge/skills/atria-browser-bridge/scripts/bridge.js",
+      "sha256": "63c124442927a1b0d732d86ca7943df959f587f738bdaa3eec49b0a5fcd1b6ad",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/scripts/bridge.js"
+    },
+    {
+      "destination": "packages/browser-bridge/skills/atria-browser-bridge/SKILL.md",
+      "sha256": "756dd85bfb43cb7452e39764d1a360ff165fc9752fca0ad30d8a686560ab030b",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/SKILL.md"
+    },
+    {
+      "destination": "packages/browser-bridge/tests/operation-registry.test.js",
+      "sha256": "31a46650d1690bf7719b2fffe272f3a29f5cd5dc5c25f63cd0938f96f4947f17",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "tests/operation-registry.test.js"
+    },
+    {
+      "destination": "packages/browser-bridge/tests/secure-bridge.test.js",
+      "sha256": "e7d24d8a12679e8bb27c72c6ac9269b987e11e075ca379de5c7f86647d71e3b4",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "tests/secure-bridge.test.js"
+    },
+    {
+      "destination": "packages/browser-bridge/tests/visual-indicator.test.js",
+      "sha256": "59bd4bce4edd07a45c302453f38f425643dda18ae6db45d7120b40e262f5f500",
+      "source": "browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "tests/visual-indicator.test.js"
+    },
+    {
+      "destination": "packages/record-replay-windows/.codex-plugin/plugin.json",
+      "sha256": "426d490f114970bd1c1ae8b1878d781b6f18be96a775f397976de7cb6d0c8377",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/.codex-plugin/plugin.json"
+    },
+    {
+      "destination": "packages/record-replay-windows/.mcp.json",
+      "sha256": "1a38d64cbce1bc0811bc3e535c4d50a44e6fdd767b1cf5dcdf4458cea031e7c1",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/.mcp.json"
+    },
+    {
+      "destination": "packages/record-replay-windows/LICENSE",
+      "sha256": "1df9731a1ae6a1cdbbb7c412772abf2c97ae9cef6917d4bc34547d6f0fb1547c",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/LICENSE"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/action-coordinator.mjs",
+      "sha256": "b6edd2ba69a797a278a6e8f0d5ae11224e3e96636cd88d36b44d5a6b30aca372",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/action-coordinator.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/actor-client.mjs",
+      "sha256": "f0cca7dc3dec4f75054fa0895c20742fbd9b820a4491c8fce0920b079fb84570",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/actor-client.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/native-client.mjs",
+      "sha256": "1d30e9c50f5d13f73822e074a60b9e6fa940a61859b1d8fc25797159fc979f33",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/native-client.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/panel-control-server.mjs",
+      "sha256": "86229b76c0434837bb979a102a41a48fe3df1822c85f0d0f1b4799ccdee6ab87",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/panel-control-server.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/plugin-path.mjs",
+      "sha256": "d1a6e6a4124c60ddd3536841b54295d301b087cafd686062236fa982e26311f4",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/plugin-path.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/replay-runner.mjs",
+      "sha256": "57c4bfadd4c2862d8a1a8809b6124cbbf57ec0927828fabd587a652a3b184a91",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/replay-runner.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/server-core.mjs",
+      "sha256": "92776e66b22cc46713ff86d88996bf59b22fb82fd5e6e5aa15eee070afc2111f",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/server-core.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/server.mjs",
+      "sha256": "b66894f0276e951bc51135ec5689a6766fc64a6384f51f96dcb8f631c9d8ed0a",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/server.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/skill-generator.mjs",
+      "sha256": "1723a45859de708e7abdd1fe5ec447c5798f93eb08a6140ff06b3031161a3b6e",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/skill-generator.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/visual-broker.mjs",
+      "sha256": "1ebb812162d9f6d65049260cca93a82afe39b0584c353626e2ab70a908549508",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/visual-broker.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/visual-controller.mjs",
+      "sha256": "2805cc50232a45db06f8c0ad4a3792336bbcb55e54c36ef02cadf3626ce713ab",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/visual-controller.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/visual-ipc.mjs",
+      "sha256": "a57ddb0da884a9bafb85dac27a4380fe890b626379c951474df710d5b7e45708",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/visual-ipc.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/widget-assets/status-panel/panel.css",
+      "sha256": "f8714c9415ef8f1dc982343b7f1abf1c24237b9280cc3518a99987800b6584e6",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/widget-assets/status-panel/panel.css"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/widget-assets/status-panel/panel.html",
+      "sha256": "e353c24ad891fba1f20d1af3491d1e7f1f524a514de272a2cb7481bcd25c265d",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/widget-assets/status-panel/panel.html"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/widget-assets/status-panel/panel.js",
+      "sha256": "11e78d1bb432ef0c0dda23dfe289135395c2524b5e38260baa16ece8ae5d7f2e",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/widget-assets/status-panel/panel.js"
+    },
+    {
+      "destination": "packages/record-replay-windows/mcp/widget-resource.mjs",
+      "sha256": "e4b04078334c4cbe7b6792fad3ac91e861cfcd95d9a6045e924f6f7d57b21ddb",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/mcp/widget-resource.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/native/recorder/Cargo.lock",
+      "sha256": "26a3ef627596b87c0d6fe26a0497ff9d4c5bad3c454ea26212df14a22583866c",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/native/recorder/Cargo.lock"
+    },
+    {
+      "destination": "packages/record-replay-windows/native/recorder/Cargo.toml",
+      "sha256": "bb5f4e552a1737a4fab12bf2b9b1e785268878c4f60e662b4757f22acdd96535",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/native/recorder/Cargo.toml"
+    },
+    {
+      "destination": "packages/record-replay-windows/native/recorder/src/bin/actor.rs",
+      "sha256": "0e6907106d6c691d19fe2b494cdab543cd3a99075ef82e2ea2018f52f7a4c253",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/native/recorder/src/bin/actor.rs"
+    },
+    {
+      "destination": "packages/record-replay-windows/native/recorder/src/bin/overlay.rs",
+      "sha256": "a0541cfe2a0da9d863b92949f20333b73e7ed476e6e710073c21ed9abcf06b05",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/native/recorder/src/bin/overlay.rs"
+    },
+    {
+      "destination": "packages/record-replay-windows/native/recorder/src/main.rs",
+      "sha256": "77f8bae02acfb4151ff399061dadd0bdd7ffa2616dc31c0593e40931584b7d0f",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/native/recorder/src/main.rs"
+    },
+    {
+      "destination": "packages/record-replay-windows/package-lock.json",
+      "sha256": "637aa973fbf16dfdda68d65a0ce612049f04a613db87f4785769812feaee4023",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/package-lock.json"
+    },
+    {
+      "destination": "packages/record-replay-windows/package.json",
+      "sha256": "59bc9f0c2310fd1abca75b47963417b144dc20d3c5d8720a8380c81270555bdc",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/package.json"
+    },
+    {
+      "destination": "packages/record-replay-windows/README.md",
+      "sha256": "be1d473a0f98f5a17c889c8114123fec5279a6157d7fc41584fb264c4c493bc7",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/README.md"
+    },
+    {
+      "destination": "packages/record-replay-windows/scripts/build-native.ps1",
+      "sha256": "fff86e29d0659e0419ea9f9503f7a8297f90839d4937619f2251720bc30892b1",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/scripts/build-native.ps1"
+    },
+    {
+      "destination": "packages/record-replay-windows/scripts/panel-browser-harness.mjs",
+      "sha256": "3c2f023edbbb2527eae4eff0797401a9e2a395be1d1794569203dc84b0566b1d",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/scripts/panel-browser-harness.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/scripts/probe-mcp.mjs",
+      "sha256": "f2e07b3b49bf97062a5f33cf717bfef5a96cdfa498b24ae30e3dd4afea40cd5f",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/scripts/probe-mcp.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/skills/record-replay-windows/README.md",
+      "sha256": "c6468bbb8ba4a757280fd68adce55e3cf07f67ee2efd0205e88f46873d27e401",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/skills/record-replay-windows/README.md"
+    },
+    {
+      "destination": "packages/record-replay-windows/skills/record-replay-windows/SKILL.md",
+      "sha256": "c6e1c74cacb35bbdba88f140ff04b4dd87fd40e259efa7709b948183bc907164",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/skills/record-replay-windows/SKILL.md"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/action-coordinator.test.mjs",
+      "sha256": "dd76a125b4851300bb9fa5f40aab395458216eb0bb6267f0df6251b0a73da4fd",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/action-coordinator.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/actor-client.test.mjs",
+      "sha256": "805802aa96899aab9f335fa69382b35cc54c8fc1b576658581c620d988d349f9",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/actor-client.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/build-native-paths.test.mjs",
+      "sha256": "bd6b57978b14273824706e5b2222d91bff6fcc30b7f4f0d88c3e0b420f4c0297",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/build-native-paths.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/native-client.test.mjs",
+      "sha256": "21e31b5345eb00fafcd849ca3b2a6503fc98471864ced17c4cb4dedddb325d7f",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/native-client.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/native-windows-acceptance.mjs",
+      "sha256": "041db1621d4d47f65a3c327ed1535e07a31e6ae667e3997adfdbc2adf29841d5",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/native-windows-acceptance.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/overlay-windows-acceptance.mjs",
+      "sha256": "1bfe3eba3dd4aa3bbed4a761d799b1f96b28f5e7f76fcc4a2d1193b900325eb0",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/overlay-windows-acceptance.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/panel-local-control.test.mjs",
+      "sha256": "db81a86a73c164c8a7bb42c0488d1af0b7f22cd20ceeb9f9ae96f09953192ad3",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/panel-local-control.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/replay-runner.test.mjs",
+      "sha256": "6c71358cb035d5b8b0480dbaa83bc390f85e230586d25e4dee7c1e91dad6a1bd",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/replay-runner.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/repro_window_focus_overlay.ps1",
+      "sha256": "0c9e59f7f572042c62c87828fc56112fc82bbca533bb4e7a429a25523b5b4035",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/repro_window_focus_overlay.ps1"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/review-remediation.test.mjs",
+      "sha256": "230b4b7bb20ac0b3512fb4da8cb3f9114e3d5a2606dd9d1329d5d171a106c379",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/review-remediation.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/server-core.test.mjs",
+      "sha256": "fbceac5d05cceb24a702908b67bf3357812f7874b75a9b72c6dc1870a740614a",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/server-core.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/skill-generator.test.mjs",
+      "sha256": "fb52b7a5b6b2072a9bdb5caee5003281cb4c82de989dec3e8f9b17d55223c068",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/skill-generator.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/visual-controller.test.mjs",
+      "sha256": "5b54013a4c45ed27ebf408849b45fc5e78d49c8a8dc2adfcbc5ae736c3b2cf36",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/visual-controller.test.mjs"
+    },
+    {
+      "destination": "packages/record-replay-windows/tests/windows-input-fixture.ps1",
+      "sha256": "c0bbe0cd525121f216ec458d436b9e05e5d45edcfc1501ff64ce92232ea87f81",
+      "source": "record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/tests/windows-input-fixture.ps1"
+    },
+    {
+      "destination": "skills/atria-browser-bridge/README.md",
+      "sha256": "20cf47f2b9492a9129ae027429be9b5fe5c8da444e6afa679172086c02c4cb32",
+      "source": "browser-bridge-skill",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/README.md"
+    },
+    {
+      "destination": "skills/atria-browser-bridge/references/setup.md",
+      "sha256": "8690d027f37e9aa94f063feed1207c1f74358722c9d86ea80392d3b373525644",
+      "source": "browser-bridge-skill",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/references/setup.md"
+    },
+    {
+      "destination": "skills/atria-browser-bridge/scripts/bridge.js",
+      "sha256": "63c124442927a1b0d732d86ca7943df959f587f738bdaa3eec49b0a5fcd1b6ad",
+      "source": "browser-bridge-skill",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/scripts/bridge.js"
+    },
+    {
+      "destination": "skills/atria-browser-bridge/SKILL.md",
+      "sha256": "756dd85bfb43cb7452e39764d1a360ff165fc9752fca0ad30d8a686560ab030b",
+      "source": "browser-bridge-skill",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceRelativePath": "skills/atria-browser-bridge/SKILL.md"
+    },
+    {
+      "destination": "skills/atria-desktop/README.md",
+      "sha256": "b081c3d2b932891dca54c70b39fd3317cc1614ed4fc45e41bc66dab0261cd048",
+      "source": "atria-desktop-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "README.md"
+    },
+    {
+      "destination": "skills/atria-desktop/references/recording.md",
+      "sha256": "40a39c573ec78587a97074acc909075569043ff71bfca4daab10e1899b8b750f",
+      "source": "atria-desktop-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "references/recording.md"
+    },
+    {
+      "destination": "skills/atria-desktop/references/setup.md",
+      "sha256": "6af314da42fc16a3a102feeccba5d76ce7483984362ada84e376a30fdfb6afa9",
+      "source": "atria-desktop-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "references/setup.md"
+    },
+    {
+      "destination": "skills/atria-desktop/scripts/desktop.js",
+      "sha256": "696e686dce38738096125697e812658fd0e18ccd02f60b65624cb577efdf234a",
+      "source": "atria-desktop-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "scripts/desktop.js"
+    },
+    {
+      "destination": "skills/atria-desktop/SKILL.md",
+      "sha256": "2ca3c366a13e5081f11be912f311ddf34222f96feb37a8c25a986c25140299d9",
+      "source": "atria-desktop-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "SKILL.md"
+    },
+    {
+      "destination": "skills/atria-recording/README.md",
+      "sha256": "5a76503cdf9dea47e9a111ffb3a4655104961ecf00414a816f82222fec590a96",
+      "source": "atria-recording-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "README.md"
+    },
+    {
+      "destination": "skills/atria-recording/SKILL.md",
+      "sha256": "ab41f4caeeb0573190b3a2e165384480d21422a0b45116c162db73bf0f7e33cc",
+      "source": "atria-recording-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "SKILL.md"
+    },
+    {
+      "destination": "skills/record-replay-windows/README.md",
+      "sha256": "c6468bbb8ba4a757280fd68adce55e3cf07f67ee2efd0205e88f46873d27e401",
+      "source": "record-replay-windows-skill",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/skills/record-replay-windows/README.md"
+    },
+    {
+      "destination": "skills/record-replay-windows/SKILL.md",
+      "sha256": "c6e1c74cacb35bbdba88f140ff04b4dd87fd40e259efa7709b948183bc907164",
+      "source": "record-replay-windows-skill",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceRelativePath": "plugins/record-replay-windows/skills/record-replay-windows/SKILL.md"
+    }
+  ]
+}

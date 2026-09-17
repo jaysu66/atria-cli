@@ -1,0 +1,9 @@
+Atria CLI
+Copyright 2026 Atria Project Authors
+
+This product includes software, documentation, and Skill guidance developed
+for the Atria project.
+
+The bundled Atria Browser Bridge retains its MIT license. Third-party
+dependencies retain their respective licenses; see THIRD_PARTY_NOTICES.md and
+the generated manifests in manifests/.

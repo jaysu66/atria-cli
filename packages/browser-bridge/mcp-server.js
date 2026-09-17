@@ -14,6 +14,16 @@
 const http = require('http');
 const readline = require('readline');
 const crypto = require('crypto');
+const {
+  TOKEN_HEADER,
+  allowedHost,
+  allowedOrigin,
+  loadOrCreateToken,
+  requestToken,
+  tokenMatches,
+  websocketToken,
+} = require('./lib/local-auth');
+const { BridgeOperationError, OperationRegistry } = require('./lib/operation-registry');
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -43,30 +53,59 @@ const MIN_INTERVAL_MS = Number(process.env.ATRIA_BROWSER_MIN_INTERVAL_MS || 0);
 // Bumped whenever the tool contract changes in a way an older extension cannot
 // serve. browser_status compares it against what the extension reports so a
 // stale extension is named as the cause instead of surfacing as odd failures.
-const PROTOCOL_VERSION = 2;
-
-const pendingQueue = [];
+const PROTOCOL_VERSION = 3;
+const MAX_OPERATIONS = Number(process.env.ATRIA_BROWSER_MAX_OPERATIONS || 512);
+const RESULT_TTL_MS = Number(process.env.ATRIA_BROWSER_RESULT_TTL_MS || 10 * 60_000);
+const auth = loadOrCreateToken();
 const waiters = [];
-const pendingResults = new Map();
-const extensionSockets = new Set();
+const extensionSockets = new Map();
+const extensionClients = new Map();
+let activeClientId = null;
 const bridgeState = {
+  bootId: crypto.randomUUID(),
   startedAt: new Date().toISOString(),
   extensionClientId: null,
   extensionVersion: null,
   protocolVersion: null,
+  extensionSessionId: null,
   lastSeenAt: null,
 };
+const operations = new OperationRegistry({
+  bootId: bridgeState.bootId,
+  maxOperations: MAX_OPERATIONS,
+  resultTtlMs: RESULT_TTL_MS,
+  onQueued: () => {
+    dispatchWaitingPoll();
+    broadcastSocket({ type: 'wake', at: new Date().toISOString() });
+  },
+});
+
+class HttpError extends Error {
+  constructor(status, code, message, details = {}) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
 
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
 }
 
-function jsonResponse(res, status, body) {
+function corsHeaders(req) {
+  const origin = req?.headers?.origin;
+  return origin && allowedOrigin(req)
+    ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+    : {};
+}
+
+function jsonResponse(res, status, body, req) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'content-type',
+    'Cache-Control': 'no-store',
+    ...corsHeaders(req),
   });
   res.end(data);
 }
@@ -93,18 +132,59 @@ function readJson(req) {
   });
 }
 
-function markExtension(req) {
+function assertLocalRequest(req) {
+  if (!allowedHost(req, PORT)) throw new HttpError(403, 'HOST_REJECTED', 'Only the configured loopback Host is accepted.');
+  if (!allowedOrigin(req)) throw new HttpError(403, 'ORIGIN_REJECTED', 'The request Origin is not allowed.');
+}
+
+function assertAuthenticated(req, token = requestToken(req)) {
+  assertLocalRequest(req);
+  if (!tokenMatches(auth.token, token)) throw new HttpError(401, 'AUTH_REQUIRED', `Provide the local pairing credential in ${TOKEN_HEADER}.`);
+}
+
+function clientDetails(req) {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
-  bridgeState.extensionClientId = url.searchParams.get('clientId') || bridgeState.extensionClientId;
-  bridgeState.extensionVersion = url.searchParams.get('version') || bridgeState.extensionVersion;
-  // Only record the protocol when the request actually carries one. Not every
-  // endpoint the extension hits sends it — the websocket upgrade does not — and
-  // defaulting on those would overwrite a known-good version with 1 and warn
-  // that a current extension is stale. Absent stays absent; the check below
-  // treats a never-reported version as protocol 1.
-  const reported = url.searchParams.get('protocol');
-  if (reported !== null) bridgeState.protocolVersion = Number(reported);
+  return {
+    clientId: url.searchParams.get('clientId') || '',
+    version: url.searchParams.get('version') || '',
+    protocolVersion: Number(url.searchParams.get('protocol')),
+    sessionId: url.searchParams.get('sessionId') || '',
+  };
+}
+
+function registerExtension(req, transport) {
+  const details = clientDetails(req);
+  if (!details.clientId || !details.version || !details.sessionId || !Number.isInteger(details.protocolVersion)) {
+    throw new HttpError(400, 'CLIENT_IDENTITY_REQUIRED', 'clientId, version, protocol, and sessionId are required.');
+  }
+  if (details.protocolVersion !== PROTOCOL_VERSION) {
+    throw new HttpError(409, 'PROTOCOL_MISMATCH', `Extension protocol ${details.protocolVersion} is incompatible with server protocol ${PROTOCOL_VERSION}. Reload the matching extension before running tools.`, {
+      expectedProtocol: PROTOCOL_VERSION,
+      actualProtocol: details.protocolVersion,
+      extensionVersion: details.version,
+    });
+  }
+  if (activeClientId && activeClientId !== details.clientId) {
+    throw new HttpError(409, 'CLIENT_AMBIGUOUS', `Browser bridge is bound to ${activeClientId}; another extension cannot take its work.`, {
+      activeClientId,
+      rejectedClientId: details.clientId,
+    });
+  }
+  activeClientId = details.clientId;
+  const existing = extensionClients.get(details.clientId) || {};
+  const client = {
+    ...existing,
+    ...details,
+    transport,
+    lastSeenAt: new Date().toISOString(),
+  };
+  extensionClients.set(details.clientId, client);
+  bridgeState.extensionClientId = details.clientId;
+  bridgeState.extensionVersion = details.version;
+  bridgeState.protocolVersion = details.protocolVersion;
+  bridgeState.extensionSessionId = details.sessionId;
   bridgeState.lastSeenAt = new Date().toISOString();
+  return client;
 }
 
 function encodeWebSocketFrame(data) {
@@ -126,16 +206,17 @@ function sendSocket(socket, data) {
 }
 
 function broadcastSocket(data) {
-  for (const socket of extensionSockets) sendSocket(socket, data);
+  for (const [socket, client] of extensionSockets) {
+    if (client.clientId === activeClientId) sendSocket(socket, data);
+  }
 }
 
-function attachExtensionSocket(req, socket) {
+function attachExtensionSocket(req, socket, client) {
   const key = req.headers['sec-websocket-key'];
   if (!key) {
     socket.destroy();
     return;
   }
-  markExtension(req);
   const accept = crypto
     .createHash('sha1')
     .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
@@ -146,17 +227,20 @@ function attachExtensionSocket(req, socket) {
       'Upgrade: websocket',
       'Connection: Upgrade',
       `Sec-WebSocket-Accept: ${accept}`,
+      'Sec-WebSocket-Protocol: atria-v3',
       '',
       '',
     ].join('\r\n'),
   );
-  extensionSockets.add(socket);
-  sendSocket(socket, { type: 'hello', pending: pendingQueue.length, at: new Date().toISOString() });
+  extensionSockets.set(socket, client);
+  sendSocket(socket, { type: 'hello', bootId: bridgeState.bootId, at: new Date().toISOString() });
   const heartbeat = setInterval(() => {
+    client.lastSeenAt = new Date().toISOString();
     bridgeState.lastSeenAt = new Date().toISOString();
-    sendSocket(socket, { type: 'ping', pending: pendingQueue.length, at: bridgeState.lastSeenAt });
+    sendSocket(socket, { type: 'ping', at: bridgeState.lastSeenAt });
   }, 20000);
   socket.on('data', () => {
+    client.lastSeenAt = new Date().toISOString();
     bridgeState.lastSeenAt = new Date().toISOString();
   });
   socket.on('close', () => {
@@ -183,44 +267,42 @@ function timeoutFor(tool, args) {
   return REQUEST_TIMEOUT_MS;
 }
 
-function enqueueTool(tool, args) {
-  const id = crypto.randomUUID();
-  const envelope = { id, tool, args: args || {}, createdAt: new Date().toISOString() };
-
-  const promise = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pendingResults.delete(id);
-      reject(new Error(`browser bridge timeout waiting for ${tool}`));
-    }, timeoutFor(tool, args));
-    pendingResults.set(id, { resolve, reject, timer });
-  });
-
-  if (waiters.length) {
-    const waiter = waiters.shift();
-    waiter(envelope);
-  } else {
-    pendingQueue.push(envelope);
-  }
-
-  broadcastSocket({ type: 'wake', pending: pendingQueue.length, at: new Date().toISOString() });
-  return promise;
+function enqueueTool(tool, args, options = {}) {
+  return operations.submit({
+    operationId: options.operationId,
+    sessionId: options.sessionId,
+    tool,
+    args: args || {},
+    timeoutMs: timeoutFor(tool, args),
+  }).promise;
 }
 
-function nextEnvelope() {
-  if (pendingQueue.length) return Promise.resolve(pendingQueue.shift());
+function dispatchWaitingPoll() {
+  while (waiters.length && activeClientId) {
+    const index = waiters.findIndex((waiter) => waiter.clientId === activeClientId);
+    if (index < 0) return;
+    const waiter = waiters.splice(index, 1)[0];
+    const envelope = operations.take(activeClientId);
+    if (!envelope) {
+      waiters.splice(index, 0, waiter);
+      return;
+    }
+    clearTimeout(waiter.timer);
+    waiter.resolve(envelope);
+  }
+}
+
+function nextEnvelope(clientId) {
+  const ready = operations.take(clientId);
+  if (ready) return Promise.resolve(ready);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      const index = waiters.indexOf(resolveEnvelope);
+      const index = waiters.indexOf(waiter);
       if (index >= 0) waiters.splice(index, 1);
       resolve(null);
     }, 25000);
-
-    function resolveEnvelope(envelope) {
-      clearTimeout(timer);
-      resolve(envelope);
-    }
-
-    waiters.push(resolveEnvelope);
+    const waiter = { clientId, resolve, timer };
+    waiters.push(waiter);
   });
 }
 
@@ -248,71 +330,120 @@ function normalizeContentBlocks(result) {
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'content-type',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    });
-    res.end();
+    try {
+      assertLocalRequest(req);
+      res.writeHead(204, {
+        ...corsHeaders(req),
+        'Access-Control-Allow-Headers': `content-type,${TOKEN_HEADER}`,
+        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      });
+      res.end();
+    } catch (error) {
+      jsonResponse(res, error.status || 403, { ok: false, code: error.code || 'REQUEST_REJECTED', error: error.message }, req);
+    }
     return;
   }
 
   try {
+    assertLocalRequest(req);
     const url = new URL(req.url, `http://${HOST}:${PORT}`);
 
     if (req.method === 'GET' && url.pathname === '/health') {
-      jsonResponse(res, 200, { ok: true, name: 'atria-browser-bridge', bridgeState, pending: pendingQueue.length, socketClients: extensionSockets.size });
+      const authenticated = tokenMatches(auth.token, requestToken(req));
+      const publicHealth = {
+        ok: true,
+        name: 'atria-browser-bridge',
+        protocolVersion: PROTOCOL_VERSION,
+        bootId: bridgeState.bootId,
+        authentication: authenticated ? 'paired' : 'required',
+      };
+      jsonResponse(
+        res,
+        200,
+        authenticated
+          ? {
+              ...publicHealth,
+              bridgeState,
+              clients: [...extensionClients.values()],
+              operations: operations.snapshot(),
+              waitingExtensionPolls: waiters.length,
+              socketClients: extensionSockets.size,
+              pairing: { tokenSource: auth.source, tokenFile: auth.path },
+            }
+          : publicHealth,
+        req,
+      );
       return;
     }
 
     if (req.method === 'GET' && url.pathname === '/tools/list') {
-      jsonResponse(res, 200, { ok: true, tools: TOOLS });
+      assertAuthenticated(req);
+      jsonResponse(res, 200, { ok: true, tools: TOOLS }, req);
       return;
     }
 
     if (req.method === 'POST' && url.pathname === '/tools/call') {
+      assertAuthenticated(req);
       const body = await readJson(req);
       const name = body.name || body.tool;
       const args = body.arguments || body.args || {};
       const handler = HANDLERS[name];
       if (!handler) {
-        jsonResponse(res, 404, { ok: false, error: `tool not found: ${name}` });
+        jsonResponse(res, 404, { ok: false, code: 'TOOL_NOT_FOUND', error: `tool not found: ${name}` }, req);
         return;
       }
-      const result = await handler(args);
-      jsonResponse(res, 200, { ok: !result?.isError, result });
+      const result = await handler({
+        ...args,
+        ...(body.operationId ? { __atriaOperationId: body.operationId } : {}),
+        ...(body.sessionId ? { __atriaSessionId: body.sessionId } : {}),
+      });
+      jsonResponse(res, 200, { ok: !result?.isError, operationId: result?.operationId || body.operationId || null, result }, req);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/operations/')) {
+      assertAuthenticated(req);
+      const operationId = decodeURIComponent(url.pathname.slice('/operations/'.length));
+      const operation = operations.describe(operationId);
+      if (!operation) {
+        jsonResponse(res, 404, { ok: false, code: 'UNKNOWN_OR_EXPIRED', bootId: bridgeState.bootId, operationId }, req);
+        return;
+      }
+      jsonResponse(res, 200, { ok: true, operation }, req);
       return;
     }
 
     if (req.method === 'GET' && url.pathname === '/extension/next') {
-      markExtension(req);
-      const envelope = await nextEnvelope();
+      assertAuthenticated(req);
+      const client = registerExtension(req, 'poll');
+      const envelope = await nextEnvelope(client.clientId);
       if (!envelope) {
-        res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(204, { 'Cache-Control': 'no-store', ...corsHeaders(req) });
         res.end();
         return;
       }
-      jsonResponse(res, 200, envelope);
+      jsonResponse(res, 200, envelope, req);
       return;
     }
 
     if (req.method === 'POST' && url.pathname === '/extension/result') {
+      assertAuthenticated(req);
+      const client = registerExtension(req, 'poll-result');
       const body = await readJson(req);
-      const entry = pendingResults.get(body.id);
-      if (!entry) {
-        jsonResponse(res, 404, { ok: false, error: 'unknown request id' });
-        return;
-      }
-      pendingResults.delete(body.id);
-      clearTimeout(entry.timer);
-      entry.resolve(normalizeContentBlocks(body.result));
-      jsonResponse(res, 200, { ok: true });
+      if (body.clientId !== client.clientId) throw new HttpError(403, 'RESULT_OWNER_MISMATCH', 'Result body clientId does not match the authenticated client.');
+      const completed = operations.complete({
+        operationId: body.operationId || body.id,
+        clientId: client.clientId,
+        result: normalizeContentBlocks(body.result),
+      });
+      jsonResponse(res, 200, { ok: true, operationId: completed.operation.id, duplicate: completed.duplicate }, req);
       return;
     }
 
-    jsonResponse(res, 404, { ok: false, error: 'not found' });
+    jsonResponse(res, 404, { ok: false, code: 'NOT_FOUND', error: 'not found' }, req);
   } catch (error) {
-    jsonResponse(res, 500, { ok: false, error: error.message || String(error) });
+    const status = error.status || (error instanceof BridgeOperationError ? 409 : 500);
+    jsonResponse(res, status, { ok: false, code: error.code || 'INTERNAL_ERROR', error: error.message || String(error), details: error.details || {} }, req);
   }
 });
 
@@ -323,7 +454,9 @@ server.on('upgrade', (req, socket) => {
       socket.destroy();
       return;
     }
-    attachExtensionSocket(req, socket);
+    assertAuthenticated(req, websocketToken(req));
+    const client = registerExtension(req, 'websocket');
+    attachExtensionSocket(req, socket, client);
   } catch (_) {
     socket.destroy();
   }
@@ -340,24 +473,54 @@ server.headersTimeout = 70000;
 
 server.listen(PORT, HOST);
 
-function callBrowser(tool, args) {
-  if (!bridgeState.lastSeenAt) {
+function bridgeToolError(code, message, details = {}) {
+  return {
+    isError: true,
+    status: code === 'EXECUTION_TIMEOUT' ? 'unknown' : 'failed',
+    code,
+    details,
+    content: [{ type: 'text', text: message }],
+  };
+}
+
+function callBrowser(tool, args = {}) {
+  const {
+    operationId,
+    __atriaOperationId,
+    sessionId,
+    __atriaSessionId,
+    ...toolArgs
+  } = args || {};
+  const lastSeen = bridgeState.lastSeenAt ? Date.parse(bridgeState.lastSeenAt) : 0;
+  if (!activeClientId || !lastSeen || Date.now() - lastSeen > 70_000) {
     return Promise.resolve({
       isError: true,
+      status: 'failed',
+      code: 'EXTENSION_NOT_CONNECTED',
       content: [
         {
           type: 'text',
-          text: `Browser extension is not connected. Start this server, load the extension/ folder in Chrome, then open the popup once. Local endpoint: http://${HOST}:${PORT}/health`,
+          text: `Browser extension is not connected and paired. Start this server, load the matching extension/ folder, paste the local pairing token in its popup, then retry. Local endpoint: http://${HOST}:${PORT}/health`,
         },
       ],
     });
   }
   // A global politeness floor belongs on the server, where every tab and every
   // concurrent task passes through it, not in each caller's loop.
-  if (tool === 'navigate' && args && args.minIntervalMsPerDomain === undefined && MIN_INTERVAL_MS > 0) {
-    args = { ...args, minIntervalMsPerDomain: MIN_INTERVAL_MS };
+  if (tool === 'navigate' && toolArgs.minIntervalMsPerDomain === undefined && MIN_INTERVAL_MS > 0) {
+    toolArgs.minIntervalMsPerDomain = MIN_INTERVAL_MS;
   }
-  return enqueueTool(tool, args);
+  try {
+    return enqueueTool(tool, toolArgs, {
+      operationId: __atriaOperationId || operationId,
+      sessionId: __atriaSessionId || sessionId || 'mcp',
+    });
+  } catch (error) {
+    if (error instanceof BridgeOperationError) {
+      return Promise.resolve(bridgeToolError(error.code, error.message, error.details));
+    }
+    throw error;
+  }
 }
 
 const TOOLS = [
@@ -365,6 +528,15 @@ const TOOLS = [
     name: 'browser_status',
     description: 'Get local bridge and Chrome extension connection status.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'operation_status',
+    description: 'Query a browser operation after an unknown/late outcome. This never re-executes the operation.',
+    inputSchema: {
+      type: 'object',
+      properties: { operationId: { type: 'string', description: 'Stable operation ID returned by the original call.' } },
+      required: ['operationId'],
+    },
   },
   {
     name: 'tabs_context',
@@ -727,6 +899,20 @@ const TOOLS = [
   },
 ];
 
+for (const tool of TOOLS) {
+  tool.inputSchema.properties ||= {};
+  if (!['browser_status', 'operation_status'].includes(tool.name)) {
+    tool.inputSchema.properties.operationId = {
+      type: 'string',
+      description: 'Optional stable ID scoped to the current bridge boot. Reusing it with identical arguments never repeats the action.',
+    };
+    tool.inputSchema.properties.sessionId = {
+      type: 'string',
+      description: 'Optional caller session label used for ownership and diagnostics.',
+    };
+  }
+}
+
 const HANDLERS = Object.fromEntries(TOOLS.map((tool) => [tool.name, (args) => callBrowser(tool.name, args)]));
 HANDLERS.browser_status = async () => ({
   content: [
@@ -744,9 +930,11 @@ HANDLERS.browser_status = async () => ({
               : null,
           minIntervalMsPerDomain: MIN_INTERVAL_MS,
           bridgeState,
-          pending: pendingQueue.length,
+          clients: [...extensionClients.values()],
+          operations: operations.snapshot(),
           waitingExtensionPolls: waiters.length,
-          pendingResults: pendingResults.size,
+          socketClients: extensionSockets.size,
+          authentication: 'local-pairing-required',
         },
         null,
         2,
@@ -754,6 +942,15 @@ HANDLERS.browser_status = async () => ({
     },
   ],
 });
+HANDLERS.operation_status = async (args = {}) => {
+  const operation = operations.describe(args.operationId);
+  return operation
+    ? { content: [{ type: 'text', text: JSON.stringify(operation, null, 2) }] }
+    : bridgeToolError('UNKNOWN_OR_EXPIRED', `No operation is retained for ${args.operationId || '(missing id)'}. Current boot: ${bridgeState.bootId}.`, {
+        bootId: bridgeState.bootId,
+        operationId: args.operationId || null,
+      });
+};
 
 let initialized = false;
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
@@ -779,7 +976,7 @@ rl.on('line', async (line) => {
       result: {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'atria-browser-bridge', version: '0.2.0' },
+        serverInfo: { name: 'atria-browser-bridge', version: '0.3.0' },
       },
     });
     return;

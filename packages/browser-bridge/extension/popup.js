@@ -1,5 +1,6 @@
 const DEFAULT_BRIDGE_PORT = 47652;
 const BRIDGE_PORT_KEY = "atriaBridgePort";
+const BRIDGE_TOKEN_KEY = "atriaBridgeToken";
 
 const bridgeStatus = document.getElementById("bridge-status");
 const extensionId = document.getElementById("extension-id");
@@ -7,6 +8,8 @@ const tabStatus = document.getElementById("tab-status");
 const pingButton = document.getElementById("ping");
 const portInput = document.getElementById("bridge-port");
 const sessionExportToggle = document.getElementById("allow-session-export");
+const tokenInput = document.getElementById("bridge-token");
+const saveTokenButton = document.getElementById("save-token");
 const SESSION_EXPORT_KEY = "atriaAllowSessionExport";
 
 extensionId.textContent = chrome.runtime.id;
@@ -38,6 +41,9 @@ function bridgeBase(port) {
 async function refresh() {
   const port = await getBridgePort();
   portInput.value = String(port);
+  const local = await chrome.storage.local.get(BRIDGE_TOKEN_KEY);
+  const token = String(local[BRIDGE_TOKEN_KEY] || "");
+  tokenInput.placeholder = token ? "已保存；留空不修改" : "粘贴 atria browser --pair 输出";
   try {
     await chrome.runtime.sendMessage({ type: "atria.wake" });
   } catch (_) {}
@@ -45,11 +51,17 @@ async function refresh() {
   bridgeStatus.textContent = "检测中";
   bridgeStatus.className = "status";
   try {
-    const response = await fetch(`${bridgeBase(port)}/health`, { cache: "no-store" });
+    const response = await fetch(`${bridgeBase(port)}/health`, {
+      cache: "no-store",
+      headers: token ? { "X-Atria-Token": token } : {}
+    });
     const data = await response.json();
-    if (data && data.ok) {
+    if (data && data.ok && data.authentication === "paired") {
       bridgeStatus.textContent = "已连接";
       bridgeStatus.className = "status ok";
+    } else if (data && data.ok) {
+      bridgeStatus.textContent = "等待配对";
+      bridgeStatus.className = "status warn";
     } else {
       bridgeStatus.textContent = "未连接";
     }
@@ -71,6 +83,22 @@ sessionExportToggle.addEventListener("change", async () => {
 });
 
 pingButton.addEventListener("click", refresh);
+saveTokenButton.addEventListener("click", async () => {
+  const token = tokenInput.value.trim();
+  if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) {
+    bridgeStatus.textContent = "密钥无效";
+    bridgeStatus.className = "status warn";
+    return;
+  }
+  const result = await chrome.runtime.sendMessage({ type: "atria.setBridgeToken", token });
+  if (!result?.ok) {
+    bridgeStatus.textContent = result?.error || "配对失败";
+    bridgeStatus.className = "status warn";
+    return;
+  }
+  tokenInput.value = "";
+  setTimeout(refresh, 300);
+});
 portInput.addEventListener("change", async () => {
   portInput.value = String(await setBridgePort(portInput.value));
   refresh();

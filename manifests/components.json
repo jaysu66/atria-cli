@@ -1,51 +1,109 @@
 {
-  "schemaVersion": 1,
-  "name": "atria-cli-public-preview",
+  "schemaVersion": 2,
+  "name": "atria-cli-source-release-candidate",
   "components": [
     {
       "id": "browser-bridge",
       "path": "packages/browser-bridge",
-      "capabilities": ["browser.read", "browser.navigate", "browser.interact", "browser.extract"],
-      "platforms": ["windows", "macos", "linux"],
+      "capabilities": [
+        "browser.read",
+        "browser.navigate",
+        "browser.interact",
+        "browser.extract"
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
       "licenseStatus": "MIT-present",
-      "configRequired": ["chrome-extension"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/browser-bridge"
+      "configRequired": [
+        "chrome-extension"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/browser-bridge",
+      "sourceCommit": "b23704cbd16e53c1a5dfc7ec519b68be20cf3836",
+      "sourceTreeHash": "79169d3391bdb29aa5742bd2042f343950718c5e4b46c48ae256cb2a1badbfb0",
+      "protocolVersion": 3
     },
     {
       "id": "record-replay-windows",
       "path": "packages/record-replay-windows",
-      "capabilities": ["desktop.control", "workflow.record", "workflow.replay", "skill.generate"],
-      "platforms": ["windows"],
-      "licenseStatus": "review-required",
-      "configRequired": ["rust", "native-build", "windows-ui-access"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows"
+      "capabilities": [
+        "desktop.control",
+        "workflow.record",
+        "workflow.replay",
+        "skill.generate"
+      ],
+      "platforms": [
+        "windows"
+      ],
+      "licenseStatus": "Apache-2.0-source",
+      "configRequired": [
+        "rust",
+        "native-build",
+        "windows-ui-access"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/desktop-recording/plugins/record-replay-windows",
+      "sourceCommit": "5137c9d0ad792a3ead98e069d9da2079c74db8c8",
+      "sourceTreeHash": "0a8f0d8ab0b8175bfcef1b1fa84b979e2b822a48e4bd71932fe098b4db59b73e",
+      "protocolVersion": 2
     },
     {
       "id": "atria-desktop-skill",
       "path": "skills/atria-desktop",
-      "capabilities": ["desktop.control", "workflow.record"],
-      "platforms": ["windows"],
-      "licenseStatus": "review-required",
-      "configRequired": ["desktop-engine"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-desktop"
+      "capabilities": [
+        "desktop.control",
+        "workflow.record"
+      ],
+      "platforms": [
+        "windows"
+      ],
+      "licenseStatus": "Apache-2.0",
+      "configRequired": [
+        "desktop-engine"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-desktop",
+      "sourceCommit": null,
+      "sourceTreeHash": "63e785dd7bee54adfb263c0a04698923c32652639cd054991d2c4788d0cb2fdf",
+      "protocolVersion": 2
     },
     {
       "id": "atria-recording-skill",
       "path": "skills/atria-recording",
-      "capabilities": ["workflow.route", "skill.generate"],
-      "platforms": ["windows"],
-      "licenseStatus": "review-required",
-      "configRequired": ["desktop-engine", "browser-engine"],
-      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-recording"
+      "capabilities": [
+        "workflow.route",
+        "skill.generate"
+      ],
+      "platforms": [
+        "windows"
+      ],
+      "licenseStatus": "Apache-2.0",
+      "configRequired": [
+        "desktop-engine",
+        "browser-engine"
+      ],
+      "sourceOfTruth": "Atria/02-CLI与通用能力/dsh-kit/skills/atria-recording",
+      "sourceCommit": null,
+      "sourceTreeHash": "3810edee03def7924910271c6a28b153222996ed262b47f51cf0cd6a58fb8f54",
+      "protocolVersion": 2
     },
     {
       "id": "atria-cli-overview",
       "path": "skills/atria-cli-overview",
-      "capabilities": ["cli.explain", "capability.discover"],
-      "platforms": ["windows", "macos", "linux"],
-      "licenseStatus": "review-required",
+      "capabilities": [
+        "cli.explain",
+        "capability.discover"
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "licenseStatus": "Apache-2.0",
       "configRequired": [],
       "sourceOfTruth": "Atria/02-CLI与通用能力/atria-cli/skills/atria-cli-overview"
     }
-  ]
+  ],
+  "version": "0.2.0-rc.1",
+  "generatedAt": "2026-09-17T04:16:33.506Z"
 }

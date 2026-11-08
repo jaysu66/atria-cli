@@ -62,7 +62,7 @@ Use `computer_screenshot` for **visual confirmation only** - when the user asks 
 ## Tools
 
 **Perception**
-- `ui_snapshot` - numbered interactive elements of the foreground or named window. Start here.
+- `ui_snapshot` - numbered interactive elements of the foreground or named window. Start here. Lists on-screen elements only (a list with many rows or tabs shows just the visible ones - scroll to reveal the rest); `truncated: true` means the element cap was hit.
 - `ui_find` - find elements by name/automationId/controlType within a window scope.
 - `ui_wait_for` - poll inside one call until an element appears. Use after navigation or dialogs instead of look-click-look round trips.
 - `computer_screenshot` - scaled screen capture, returns the image. `physical = image_coord * scale`.
@@ -75,7 +75,7 @@ Use `computer_screenshot` for **visual confirmation only** - when the user asks 
 - `computer_key` - a key or combo: `enter`, `ctrl+s`, `alt+f4`. Pass `expect` to hard-verify the foreground window first.
 - `ui_invoke` - act on a UIA element with no mouse at all: `invoke` / `click` / `focus` / `set_value`. Prefer this over coordinates whenever the element is findable.
 - `computer_move`, `computer_drag`, `computer_scroll` - smooth, visible mouse motion.
-- `computer_window_focus` - bring a window forward by hwnd, title substring, or processName. Returns whether focus actually landed - check it.
+- `computer_window_focus` - bring a window forward by hwnd, title substring, or processName. Returns whether focus actually landed - check it. Packaged (UWP) apps such as Calculator or Settings run under `ApplicationFrameHost.exe`, so `processName` fails with `no window matched`; match them by `title`.
 - `computer_batch` - several deterministic actions in ONE call. Stops on first error. **Indexes inside a batch refer to the snapshot taken before the batch**, so if an early action changes the UI, use coordinates or keyboard-only follow-ups for the rest.
 
 **Recording and replay** - see `references/recording.md` for the full workflow.

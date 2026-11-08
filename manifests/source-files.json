@@ -660,7 +660,7 @@
     },
     {
       "destination": "skills/atria-desktop/SKILL.md",
-      "sha256": "a4c25850972a7c85ad84ecf25d75bbc6fd3f5153aa1799f6f60a5d30ad746e05",
+      "sha256": "c579be5e6cc611fa5193f211bb583d8a979051b2288f52d318564e2a9994af95",
       "source": "atria-desktop-skill",
       "sourceCommit": null,
       "sourceRelativePath": "SKILL.md"

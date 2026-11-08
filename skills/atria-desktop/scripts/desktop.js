@@ -103,6 +103,14 @@ function toolOutcome(result) {
   };
 }
 
+function failureMessage(out) {
+  if (out.error) return String(out.error);
+  const payload = toolOutcome(out.result).payload;
+  const detail = payload.message || payload.error || (out.result && out.result.content && out.result.content[0] && out.result.content[0].text);
+  const label = [out.code || payload.code, out.status].filter(Boolean).join(' ');
+  return [label, detail].filter(Boolean).join(': ') || 'tool call failed (no error detail returned)';
+}
+
 /** Locate the record-replay-windows suite. Override with ATRIA_DESKTOP_SUITE_DIR. */
 function resolveSuiteDir() {
   const bundled = path.resolve(__dirname, '..', '..', '..', 'packages', 'record-replay-windows');
@@ -394,6 +402,25 @@ function runDaemon() {
   function bye() { try { child.kill(); } catch (_) {} process.exit(0); }
   process.once('SIGINT', bye);
   process.once('SIGTERM', bye);
+
+  const idleMs = Number(process.env.ATRIA_DESKTOP_IDLE_MS || 600000);
+  if (idleMs > 0) {
+    let lastActivity = Date.now();
+    server.on('request', function () { lastActivity = Date.now(); });
+    const idleTimer = setInterval(async function () {
+      if (Date.now() - lastActivity < idleMs) return;
+      if (Array.from(operations.values()).some(function (op) { return op.promise; })) return;
+      try {
+        const status = await rpc('tools/call', { name: 'event_stream_status', arguments: {} }, 5000);
+        if (status.error || status.result.isError || toolOutcome(status.result).payload.isRecording) return;
+      } catch (_) {
+        return;
+      }
+      console.error('[daemon] idle for ' + Math.round(idleMs / 1000) + 's with no recording; exiting');
+      bye();
+    }, Math.min(60000, idleMs));
+    idleTimer.unref?.();
+  }
 }
 
 // ---------------------------------------------------------------- client ----
@@ -555,7 +582,7 @@ async function main() {
   const operationId = args.operationId || (daemon.bootId ? daemon.bootId + ':' + crypto.randomUUID() : undefined);
   const out = await request('POST', '/call', { tool: tool, args: args, operationId: operationId });
   if (!out.ok) {
-    console.error('ERROR: ' + out.error);
+    console.error('ERROR: ' + failureMessage(out));
     process.exit(1);
   }
   const saved = saveArtifacts(out.result, tool);
@@ -564,7 +591,11 @@ async function main() {
   console.log('[raw] ' + saved.rawPath);
 }
 
-main().catch(function (err) {
-  console.error('ERROR: ' + err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(function (err) {
+    console.error('ERROR: ' + err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { failureMessage };

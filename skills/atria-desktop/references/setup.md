@@ -24,6 +24,7 @@ If the suite lives elsewhere, set `ATRIA_DESKTOP_SUITE_DIR` to its directory.
 | `ATRIA_DESKTOP_SUITE_DIR` | probed | Suite directory containing `mcp/server.mjs` |
 | `ATRIA_DESKTOP_HOST` | `127.0.0.1` | Daemon bind host |
 | `ATRIA_DESKTOP_PORT` | `47653` | Daemon port (browser bridge uses 47652) |
+| `ATRIA_DESKTOP_IDLE_MS` | `600000` | Daemon exits after this many idle ms when no recording is active; `0` disables |
 | `ATRIA_DESKTOP_OUT` | `%TEMP%/atria-desktop` | Where screenshots and raw JSON land |
 | `CODEX_SKILLS_ROOT` | `~/.codex/skills` | Where generated workflow skills install |
 

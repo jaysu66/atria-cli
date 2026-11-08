@@ -44,7 +44,7 @@ node "<skill-dir>/scripts/desktop.js" --stop
 node "<skill-dir>/scripts/desktop.js" --tools
 ```
 
-The daemon holds the MCP server process open on `127.0.0.1:47653`. **Do not `--stop` it while a recording is active** - stopping the daemon kills the recorder.
+The daemon holds the MCP server process open on `127.0.0.1:47653`. **Do not `--stop` it while a recording is active** - stopping the daemon kills the recorder. The daemon exits by itself after 10 idle minutes (never while a recording is active) and the next call restarts it; set `ATRIA_DESKTOP_IDLE_MS=0` to disable.
 
 ## The core loop: snapshot, then act by index
 
@@ -52,7 +52,7 @@ The daemon holds the MCP server process open on `127.0.0.1:47653`. **Do not `--s
 
 ```
 ui_snapshot            ->  numbered elements with names and coordinates
-computer_click         ->  {"elementIndex": 7}
+computer_click         ->  {"elementIndex": 7, "snapshotId": <id from that snapshot>}
 ```
 
 Element indexes go stale as soon as the UI changes. Actions return fresh state automatically, so re-read the returned state rather than re-snapshotting blindly. When an action changed the layout, take a new `ui_snapshot` before using an index again.
@@ -62,20 +62,20 @@ Use `computer_screenshot` for **visual confirmation only** - when the user asks 
 ## Tools
 
 **Perception**
-- `ui_snapshot` - numbered interactive elements of the foreground or named window. Start here.
+- `ui_snapshot` - numbered interactive elements of the foreground or named window. Start here. Lists on-screen elements only (a list with many rows or tabs shows just the visible ones - scroll to reveal the rest); `truncated: true` means the element cap was hit.
 - `ui_find` - find elements by name/automationId/controlType within a window scope.
 - `ui_wait_for` - poll inside one call until an element appears. Use after navigation or dialogs instead of look-click-look round trips.
 - `computer_screenshot` - scaled screen capture, returns the image. `physical = image_coord * scale`.
 - `computer_window_list` - visible top-level windows (hwnd/title/pid/processName) plus the foreground one.
 
 **Action**
-- `computer_click` - prefer `{elementIndex}` from `ui_snapshot`; `{x, y}` also works.
+- `computer_click` - prefer `{elementIndex, snapshotId}` from the latest `ui_snapshot` (`snapshotId` is required with `elementIndex` and a stale one is rejected); `{x, y}` also works.
 - `ui_set_value` - set a text field via UIA ValuePattern with **verified write** (reads the value back). The most reliable way to fill inputs - prefer it over `computer_type` for real fields.
 - `computer_type` - type text, CJK supported, `\n` = Enter. `clearFirst: true` replaces content via Ctrl+A.
 - `computer_key` - a key or combo: `enter`, `ctrl+s`, `alt+f4`. Pass `expect` to hard-verify the foreground window first.
 - `ui_invoke` - act on a UIA element with no mouse at all: `invoke` / `click` / `focus` / `set_value`. Prefer this over coordinates whenever the element is findable.
 - `computer_move`, `computer_drag`, `computer_scroll` - smooth, visible mouse motion.
-- `computer_window_focus` - bring a window forward by hwnd, title substring, or processName. Returns whether focus actually landed - check it.
+- `computer_window_focus` - bring a window forward by hwnd, title substring, or processName. Returns whether focus actually landed - check it. Packaged (UWP) apps such as Calculator or Settings run under `ApplicationFrameHost.exe`, so `processName` fails with `no window matched`; match them by `title`.
 - `computer_batch` - several deterministic actions in ONE call. Stops on first error. **Indexes inside a batch refer to the snapshot taken before the batch**, so if an early action changes the UI, use coordinates or keyboard-only follow-ups for the rest.
 
 **Recording and replay** - see `references/recording.md` for the full workflow.

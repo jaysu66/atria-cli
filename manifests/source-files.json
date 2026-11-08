@@ -639,21 +639,28 @@
     },
     {
       "destination": "skills/atria-desktop/references/setup.md",
-      "sha256": "6af314da42fc16a3a102feeccba5d76ce7483984362ada84e376a30fdfb6afa9",
+      "sha256": "439fbf3759fb2356d963fd1aed692b5df91d94f5c5971dd06b3a89178cda488f",
       "source": "atria-desktop-skill",
       "sourceCommit": null,
       "sourceRelativePath": "references/setup.md"
     },
     {
       "destination": "skills/atria-desktop/scripts/desktop.js",
-      "sha256": "696e686dce38738096125697e812658fd0e18ccd02f60b65624cb577efdf234a",
+      "sha256": "28c6811a5b5a9625fd8a344435a38c790c8d5bbf9874bb965927f5c68a1f07e7",
       "source": "atria-desktop-skill",
       "sourceCommit": null,
       "sourceRelativePath": "scripts/desktop.js"
     },
     {
+      "destination": "skills/atria-desktop/scripts/package.json",
+      "sha256": "8005a3491db7d92f36ac66369861589f9c47123d3a7c71e643fc2c06168cd45a",
+      "source": "atria-desktop-skill",
+      "sourceCommit": null,
+      "sourceRelativePath": "scripts/package.json"
+    },
+    {
       "destination": "skills/atria-desktop/SKILL.md",
-      "sha256": "2ca3c366a13e5081f11be912f311ddf34222f96feb37a8c25a986c25140299d9",
+      "sha256": "c579be5e6cc611fa5193f211bb583d8a979051b2288f52d318564e2a9994af95",
       "source": "atria-desktop-skill",
       "sourceCommit": null,
       "sourceRelativePath": "SKILL.md"

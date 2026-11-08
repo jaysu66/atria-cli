@@ -44,7 +44,7 @@ node "<skill-dir>/scripts/desktop.js" --stop
 node "<skill-dir>/scripts/desktop.js" --tools
 ```
 
-The daemon holds the MCP server process open on `127.0.0.1:47653`. **Do not `--stop` it while a recording is active** - stopping the daemon kills the recorder.
+The daemon holds the MCP server process open on `127.0.0.1:47653`. **Do not `--stop` it while a recording is active** - stopping the daemon kills the recorder. The daemon exits by itself after 10 idle minutes (never while a recording is active) and the next call restarts it; set `ATRIA_DESKTOP_IDLE_MS=0` to disable.
 
 ## The core loop: snapshot, then act by index
 
@@ -52,7 +52,7 @@ The daemon holds the MCP server process open on `127.0.0.1:47653`. **Do not `--s
 
 ```
 ui_snapshot            ->  numbered elements with names and coordinates
-computer_click         ->  {"elementIndex": 7}
+computer_click         ->  {"elementIndex": 7, "snapshotId": <id from that snapshot>}
 ```
 
 Element indexes go stale as soon as the UI changes. Actions return fresh state automatically, so re-read the returned state rather than re-snapshotting blindly. When an action changed the layout, take a new `ui_snapshot` before using an index again.
@@ -69,7 +69,7 @@ Use `computer_screenshot` for **visual confirmation only** - when the user asks 
 - `computer_window_list` - visible top-level windows (hwnd/title/pid/processName) plus the foreground one.
 
 **Action**
-- `computer_click` - prefer `{elementIndex}` from `ui_snapshot`; `{x, y}` also works.
+- `computer_click` - prefer `{elementIndex, snapshotId}` from the latest `ui_snapshot` (`snapshotId` is required with `elementIndex` and a stale one is rejected); `{x, y}` also works.
 - `ui_set_value` - set a text field via UIA ValuePattern with **verified write** (reads the value back). The most reliable way to fill inputs - prefer it over `computer_type` for real fields.
 - `computer_type` - type text, CJK supported, `\n` = Enter. `clearFirst: true` replaces content via Ctrl+A.
 - `computer_key` - a key or combo: `enter`, `ctrl+s`, `alt+f4`. Pass `expect` to hard-verify the foreground window first.
